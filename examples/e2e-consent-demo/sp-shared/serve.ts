@@ -2,8 +2,8 @@
 // sp-hotel/server.ts are three-line wrappers around this.
 
 import 'dotenv/config';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
 import { buildStatusListCredential, createStatusList } from '@helixid/sdk-js';
 import { env, type SpDefinition } from '../helixid-config/index.js';
 import { createSpApp } from './app.js';
@@ -11,7 +11,7 @@ import { createAuditEmitter } from './audit.js';
 import { loadSpIdentity, statePath, STATUS_LIST_LENGTH } from './identity.js';
 import { SpStore } from './store.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
+const requireFromHere = createRequire(import.meta.url);
 
 export async function serveSp(definition: SpDefinition): Promise<void> {
   const identity = await loadSpIdentity(env.walletsDir, definition.id);
@@ -33,11 +33,12 @@ export async function serveSp(definition: SpDefinition): Promise<void> {
     // base URL can be localhost, but the server should call its own loopback.
     mcpServerUrl: `http://127.0.0.1:${definition.port}/api/mcp`,
     store,
-    // @helixid/widget now lives in the separate helix-sdk-js repo (sibling of
-    // this repo), not in this repo's own packages/ -- one extra level up from
-    // the pre-split path. Matches the Docker image's vendored
-    // helix-sdk-js/widget/dist (see docker/node.Dockerfile).
-    widgetDistPath: resolve(here, '../../../../helix-sdk-js/widget/dist'),
+    // @helixid/widget is an ordinary dependency now, so let Node resolve it
+    // rather than assuming a sibling checkout. Its "." export is dist/index.js,
+    // so that file's directory is the dist the consent page loads /widget/*
+    // from. Resolving also survives pnpm putting the package in a
+    // content-addressed store path that no relative path could name.
+    widgetDistPath: dirname(requireFromHere.resolve('@helixid/widget')),
     // Reports this SP's own verification and authorization decisions to the
     // shared audit log. Unconfigured (no URL/key) degrades to a no-op emitter.
     audit: createAuditEmitter({

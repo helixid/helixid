@@ -36,6 +36,10 @@ async function waitForApi(url: string, attempts = 60): Promise<void> {
   throw new Error(`HelixID API at ${url} did not become healthy in time.`);
 }
 
+// This seed is shared with e2e-travel-concierge-py, whose Console is published
+// on a different port, so the URL printed below is overridable.
+const CONSOLE_URL = process.env.CONSOLE_URL ?? 'http://localhost:8080';
+
 async function main(): Promise<void> {
   await waitForApi(env.helixApiUrl);
   await loadPersonas();
@@ -44,7 +48,7 @@ async function main(): Promise<void> {
   // reset path — documented in the README.)
   if (hasPersona(INITIAL_PERSONA.id)) {
     log('Setup', `Persona "${INITIAL_PERSONA.id}" already enrolled; skipping.`);
-    log('Setup', 'Seed complete (reused). Open Console at http://localhost:8080 → Audit.');
+    log('Setup', `Seed complete (reused). Open Console at ${CONSOLE_URL} → Audit.`);
     return;
   }
 
@@ -60,7 +64,7 @@ async function main(): Promise<void> {
   log('Agent', `DID: ${did}`);
   log('Agent', `Scopes: ${persona.scopes.join(', ')}`);
   log('Agent', `Encrypted wallet written to ${persona.walletFile}.`);
-  log('Setup', 'Seed complete. Token, enrollment and issuance events are now in Console → Audit (http://localhost:8080).');
+  log('Setup', `Seed complete. Token, enrollment and issuance events are now in Console → Audit (${CONSOLE_URL}).`);
 }
 
 main().catch((error: unknown) => {

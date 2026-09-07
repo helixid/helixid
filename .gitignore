@@ -3,10 +3,11 @@ node_modules/
 dist/
 coverage/
 data/
-.env
-.env.local
-.env.production
-.env.test
+# Any local env file (.env, .env.local, .env-new, .env.whatever). The
+# negation keeps the committed template tracked. `*.env` only catches names
+# *ending* in .env, which silently missed variants like `.env-new`.
+.env*
+!.env.example
 *.env
 *.sqlite
 *.sqlite-journal

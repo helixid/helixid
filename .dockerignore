@@ -8,5 +8,7 @@ coverage
 .env.*.local
 *.log
 .DS_Store
-examples
-docs
+
+# NOTE: examples/ and docs/ are deliberately NOT ignored. The root Dockerfile
+# never COPYs them, but examples/*/docker/*.Dockerfile build from this repo
+# root as their context and do need examples/ present.

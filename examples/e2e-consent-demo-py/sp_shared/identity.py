@@ -1,5 +1,5 @@
 # SP identity provisioning. Python port of
-# helix-server/examples/e2e-consent-demo/sp-shared/identity.ts.
+# examples/e2e-consent-demo/sp-shared/identity.ts.
 #
 # provision_sp_identity() is called once by the seeder; each SP server calls
 # load_sp_identity() on boot and hosts what it finds.

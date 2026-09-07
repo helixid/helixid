@@ -16,13 +16,10 @@ name: helixid-consent-demo
 
 x-node-service: &node-service
   build:
-    # TODO(helixid/helix-sdk-js visibility): once helix-sdk-js is public,
-    # switch this back to `context: ../..` / plain `pnpm install` and drop
-    # the sibling-repo vendoring in node.Dockerfile -- see its header comment.
-    context: ../../..
-    dockerfile: helix-server/examples/e2e-consent-demo/docker/node.Dockerfile
+    context: ../..
+    dockerfile: examples/e2e-consent-demo/docker/node.Dockerfile
   restart: unless-stopped
-  working_dir: /repo/helix-server/examples/e2e-consent-demo
+  working_dir: /repo/examples/e2e-consent-demo
 
 services:
   # ── HelixID API — issues the agent's authority credential ────────────────
@@ -30,8 +27,8 @@ services:
   # container. The two SPs are did:web and resolve over the compose network.
   helix-api:
     build:
-      context: ../../..
-      dockerfile: helix-server/Dockerfile
+      context: ../..
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     environment:
@@ -66,10 +63,13 @@ services:
       start_period: 20s
 
   # ── Console (audit UI) ───────────────────────────────────────────────────
+  # Built FROM the Console's published multi-arch image on Docker Hub, so this
+  # demo needs no second checkout -- see docker/console.Dockerfile, which only
+  # layers this example's nginx server block on top.
   console:
     build:
-      context: ../../..
-      dockerfile: helix-server/examples/e2e-travel-concierge/docker/console.Dockerfile
+      context: ./docker
+      dockerfile: console.Dockerfile
     ports:
       - "8080:80"
     environment:

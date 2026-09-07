@@ -21,17 +21,17 @@ name: helixid-travel-concierge-py
 
 x-python-service: &python-service
   build:
-    context: ../../..
-    dockerfile: helix-server/examples/e2e-travel-concierge-py/docker/python.Dockerfile
+    context: ../..
+    dockerfile: examples/e2e-travel-concierge-py/docker/python.Dockerfile
   restart: unless-stopped
-  working_dir: /repo/helix-server/examples/e2e-travel-concierge-py
+  working_dir: /repo/examples/e2e-travel-concierge-py
 
 services:
   # ── HelixID API ──────────────────────────────────────────────────────────
   helix-api:
     build:
-      context: ../../..
-      dockerfile: helix-server/Dockerfile
+      context: ../..
+      dockerfile: Dockerfile
     ports:
       - "3002:3000"
     environment:
@@ -58,8 +58,8 @@ services:
   # ── Console (audit UI), unchanged JS build ──────────────────────────────
   console:
     build:
-      context: ../../..
-      dockerfile: helix-server/examples/e2e-travel-concierge/docker/console.Dockerfile
+      context: ./docker
+      dockerfile: console.Dockerfile
     ports:
       - "8082:80"
     environment:
@@ -77,11 +77,14 @@ services:
   # the Python agent below loads it directly. ────────────────────────────
   helixid-setup:
     build:
-      context: ../../..
-      dockerfile: helix-server/examples/e2e-travel-concierge/docker/node.Dockerfile
+      context: ../..
+      dockerfile: examples/e2e-travel-concierge/docker/node.Dockerfile
     restart: "no"
     command: ["pnpm", "run", "setup"]
     environment:
+      # Shared with e2e-travel-concierge, whose Console is on 8080; this stack
+      # publishes it on 8082, so tell the seed which URL to print.
+      CONSOLE_URL: http://localhost:8082
       HELIX_API_URL: http://helix-api:3000
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
       WALLETS_DIR: /wallets

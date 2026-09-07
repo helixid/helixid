@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dgverse-labs/helixid/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/helixid/helixid/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.w3.org/TR/vc-data-model-2.0/"><img src="https://img.shields.io/badge/W3C-VC%202.0-green.svg" alt="W3C VC 2.0"></a>
   <a href="https://www.w3.org/TR/did-core/"><img src="https://img.shields.io/badge/W3C-DID%201.0-green.svg" alt="W3C DID 1.0"></a>
 </p>
@@ -278,6 +278,10 @@ Three ways in, depending on what you want to see. All run locally.
 New here? Run the **consent demo** — it needs no API key and shows the whole
 identity → consent → verification → action → audit story end to end.
 
+Run one demo at a time — the two TypeScript demos share ports `3000`/`8080`.
+Ports, demo sign-ins and troubleshooting for all four are in
+[`examples/README.md`](examples/README.md).
+
 ### 5-minute path (no infrastructure)
 
 No Postgres, no Redis, no Hedera account, no running API. Works immediately after install —
@@ -350,7 +354,7 @@ identity, its own status list, and its own consent grant. No LLM API key
 required — the agent falls back to a scripted planner if you don't set one.
 
 ```bash
-git clone https://github.com/dgverse-labs/helixid.git
+git clone https://github.com/helixid/helixid.git
 cd helixid/examples/e2e-consent-demo
 cp .env.example .env
 docker compose up --build
@@ -404,15 +408,21 @@ Same demo, no local setup. -->
 **Step 1 — Get an LLM API key**
 
 The concierge uses a real LLM to decide when to call the booking tool. Obtain a
-key from Anthropic, OpenAI, or Azure OpenAI:
+key from Anthropic, OpenAI, Azure OpenAI, or Google:
 
 - [Anthropic Console](https://console.anthropic.com/settings/keys)
 - [OpenAI Platform](https://platform.openai.com/api-keys)
+- [Google AI Studio](https://aistudio.google.com/apikey) — free tier, but see the note below
+
+> **On the free Gemini tier:** it returns `503 UNAVAILABLE` under load and
+> rate-limits quickly. This demo has no scripted fallback, so it will show the
+> provider error until it recovers. Anthropic or OpenAI give a steadier run.
+> (The consent demo *does* fall back to a scripted planner.)
 
 **Step 2 — Get the demo**
 
 ```bash
-git clone https://github.com/dgverse-labs/helixid.git
+git clone https://github.com/helixid/helixid.git
 cd helixid
 cd examples/e2e-travel-concierge
 cp .env.example .env
@@ -421,7 +431,7 @@ cp .env.example .env
 Edit `.env` and add your provider and API key:
 
 ```bash
-LLM_PROVIDER=anthropic # anthropic (default) | openai | azure
+LLM_PROVIDER=anthropic # anthropic (default) | openai | azure | gemini
 LLM_API_KEY=your-provider-key
 ```
 
@@ -824,8 +834,8 @@ Key areas where help is needed:
 
 ## Community
 
-- [GitHub Discussions](https://github.com/dgverse-labs/helixid/discussions) — questions, ideas, and show-and-tell
-- [GitHub Issues](https://github.com/dgverse-labs/helixid/issues) — bug reports and feature requests
+- [GitHub Discussions](https://github.com/helixid/helixid/discussions) — questions, ideas, and show-and-tell
+- [GitHub Issues](https://github.com/helixid/helixid/issues) — bug reports and feature requests
 
 ## License
 
@@ -835,8 +845,8 @@ Key areas where help is needed:
 
 Thanks to everyone who has contributed to HelixID!
 
-<a href="https://github.com/dgverse-labs/helixid/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=dgverse-labs/helixid" />
+<a href="https://github.com/helixid/helixid/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=helixid/helixid" />
 </a>
 
 <sub>Made with [contrib.rocks](https://contrib.rocks)</sub>
