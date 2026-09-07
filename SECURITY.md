@@ -4,6 +4,10 @@ HelixID is infrastructure for cryptographic identity and authorization of AI age
 
 This document covers how to report vulnerabilities, what is in scope, what you can expect from us, and our commitments to good-faith researchers.
 
+The same policy is published at
+[docs.helixid.dev/security/reporting-a-vulnerability](https://docs.helixid.dev/security/reporting-a-vulnerability).
+It applies across every HelixID repository, not just this one.
+
 ---
 
 ## Supported Versions
@@ -99,7 +103,7 @@ Vulnerabilities in any code within this repository, with particular priority for
 - DoS via unbounded policy input, unbounded delegation depth beyond sane configuration, or resource exhaustion from attacker-controlled cache keys at the edge — unless a default configuration enables the attack
 - Social engineering, physical attacks, or attacks on personal infrastructure of maintainers
 - Findings in forks, unreleased branches, or versions not listed as supported
-- Missing security headers, informational TLS weaknesses, or SPF/DKIM findings on `dgverse.io` marketing infrastructure
+- Missing security headers, informational TLS weaknesses, or SPF/DKIM findings on `dgverse.in` marketing infrastructure
 - Automated scanner output without a demonstrated or credibly theorized security impact
 
 ### Key Compromise
@@ -135,7 +139,7 @@ We do not currently offer a monetary bug bounty. When a budget makes this credib
 What we do offer:
 
 - **CVE and GitHub Security Advisory credit** under your preferred name
-- **Hall of Fame** in [`SECURITY_HALL_OF_FAME.md`](SECURITY_HALL_OF_FAME.md) for valid, impactful reports
+- **Credit in the published advisory** for valid, impactful reports, under the name or handle you choose
 - Direct acknowledgement in release notes for the patched version
 - Our genuine thanks — the work you do protects everyone operating HelixID in production
 
@@ -143,7 +147,7 @@ What we do offer:
 
 ## Security Best Practices for Operators
 
-If you are running HelixID in production, these are the highest-leverage things to get right. Not a substitute for full guidance in [`docs/security-model.md`](docs/security-model.md), but a useful starting point:
+If you are running HelixID in production, these are the highest-leverage things to get right. Not a substitute for the full guidance in [The Trust Stack](https://docs.helixid.dev/concepts/trust-stack), but a useful starting point:
 
 - **Key custody:** Never store issuer or agent private keys in plaintext in source control, environment files committed to Git, or logs. Use a KMS, HSM, or at minimum encrypted-at-rest secret storage with IAM-scoped access.
 - **Revocation caches:** Configure reasonable TTLs. Over-aggressive caching leads to use-after-revocation.
@@ -151,22 +155,24 @@ If you are running HelixID in production, these are the highest-leverage things 
 - **Delegation depth:** Set `maxDelegationDepth` explicitly on every credential. The default is conservative; do not disable the check.
 - **Clock skew:** Ensure reasonable clock synchronization. Credential expiration checks depend on it.
 - **Audit ingestion:** Treat audit logs as append-only evidence. Do not rely on a single datastore as the sole audit trail.
-- **Subscribe to advisories:** Watch this repository with "Releases and security advisories" enabled, or subscribe via RSS to the [Security Advisories feed](https://github.com/nicedigverse/helixid/security/advisories).
+- **Subscribe to advisories:** Watch this repository with "Releases and security advisories" enabled, or subscribe via RSS to the [Security Advisories feed](https://github.com/helixid/helixid/security/advisories).
 
 ---
 
 ## Related Documents
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution process and coding standards
-- [`docs/security-model.md`](docs/security-model.md) — threat model and architectural security assumptions
-- [`docs/architecture.md`](docs/architecture.md) — full architecture overview
+- [Reporting a Vulnerability](https://docs.helixid.dev/security/reporting-a-vulnerability) — this policy on the docs site
+- [The Trust Stack](https://docs.helixid.dev/concepts/trust-stack) — architectural security model
+- [The Two-Issuer Model](https://docs.helixid.dev/concepts/two-issuer-model) — why authority is the intersection of two credentials
+- [`docs/decisions.md`](docs/decisions.md) — the append-only decision log
 
 ---
 
 ## Contact
 
 - **Security reports:** `hello@dgverse.in`
-- **GitHub Security Advisories:** [github.com/nicedigverse/helixid/security/advisories/new](https://github.com/nicedigverse/helixid/security/advisories/new)
+- **GitHub Security Advisories:** [github.com/helixid/helixid/security/advisories/new](https://github.com/helixid/helixid/security/advisories/new)
 - **General inquiries (non-security):** `hello@dgverse.in`
 
 ---
