@@ -37,19 +37,15 @@ jobs:
           node-version: '24.15.0'
           cache: 'pnpm'
 
-      # examples/e2e-travel-concierge depends on @helixid/sdk-js and
-      # @helixid/mcp via *local* file:../../../helix-sdk-js/... paths (a true
-      # sibling-repo checkout on a dev machine with the split repos side by
-      # side) rather than the git+path specs the rest of the workspace uses —
-      # this CI job only checks out helixid, so that directory never exists
-      # here and a plain `pnpm install` fails with ENOENT trying to scandir
-      # it. Excluded from install entirely; it has no build/test:non-live
-      # script, so nothing later in this workflow needs it installed. (See
-      # its own package.json/docker-compose.yml/README.md for the real,
-      # sibling-checkout-based install path.) Same workaround as
-      # helix-server-enterprise's CI for the same example.
+      # examples/e2e-travel-concierge used to be excluded here: it pinned
+      # @helixid/sdk-js and @helixid/mcp at file:../../../helix-sdk-js/...
+      # paths, which only resolve on a machine with the split repos checked
+      # out side by side, so a plain install failed with ENOENT. Those are
+      # now the same github: specs the rest of the workspace uses (public
+      # helixid/helix-sdk-js), so a single-checkout install works and the
+      # exclusion is gone.
       - name: Install dependencies
-        run: corepack enable && pnpm install --frozen-lockfile --filter '!@helixid/example-e2e-travel-concierge'
+        run: corepack enable && pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm run workspace:build

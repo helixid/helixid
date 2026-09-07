@@ -21,16 +21,16 @@ name: helixid-consent-demo-py
 
 x-python-service: &python-service
   build:
-    context: ../../..
-    dockerfile: helix-server/examples/e2e-consent-demo-py/docker/python.Dockerfile
+    context: ../..
+    dockerfile: examples/e2e-consent-demo-py/docker/python.Dockerfile
   restart: unless-stopped
-  working_dir: /repo/helix-server/examples/e2e-consent-demo-py
+  working_dir: /repo/examples/e2e-consent-demo-py
 
 services:
   helix-api:
     build:
-      context: ../../..
-      dockerfile: helix-server/Dockerfile
+      context: ../..
+      dockerfile: Dockerfile
     ports:
       - "3001:3000"
     environment:
@@ -61,8 +61,8 @@ services:
 
   console:
     build:
-      context: ../../..
-      dockerfile: helix-server/examples/e2e-travel-concierge/docker/console.Dockerfile
+      context: ./docker
+      dockerfile: console.Dockerfile
     ports:
       - "8081:80"
     environment:

@@ -5,7 +5,7 @@
 # between them at runtime -- that independence is the point of steps 3 and 4
 # of the demo flow.
 #
-# Python port of helix-server/examples/e2e-consent-demo/helixid-config/index.ts
+# Python port of examples/e2e-consent-demo/helixid-config/index.ts
 # -- kept field-for-field identical so the existing SP/agent frontends and
 # route contracts need no changes.
 

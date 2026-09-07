@@ -38,7 +38,12 @@ so it runs in CI.
 
 ## Running it
 
+You need **this repo and Docker. Nothing else** — no second checkout, no
+pre-built sibling packages, no registry credentials:
+
 ```bash
+git clone https://github.com/helixid/helixid.git
+cd helixid/examples/e2e-consent-demo
 cp .env.example .env
 docker compose up --build
 ```
@@ -51,6 +56,27 @@ docker compose up --build
 | Console (audit) | http://localhost:8080 — `admin` / `admin` |
 
 Reset to a clean slate: `docker compose down -v`.
+
+### What `docker compose up` actually does
+
+Some services are built from this repo, one is pulled ready-made:
+
+| Service | Where it comes from | Why |
+|---|---|---|
+| `helix-api` | built from this repo's root `Dockerfile` | it's the thing being demoed — you're running the code you just cloned |
+| `seed`, `sp-airline`, `sp-hotel`, `agent` | built from `docker/node.Dockerfile` | demo code, lives here |
+| `console` | **pulled** from Docker Hub (`helixid/console`) | the Console is a separate repo (`helixid/helix-console`) that publishes a multi-arch image, so there's no reason to make you clone and build it |
+
+The Console step is worth spelling out, because it's the one that used to
+require a second checkout. `docker/console.Dockerfile` is two lines: it starts
+`FROM helixid/console:latest` and copies in `docker/console-nginx.conf`. That
+nginx config serves the Console SPA and reverse-proxies `/v1` and `/health` to
+`helix-api`, so the browser talks to the API **same-origin** — the demo API
+ships without CORS, and the Console calls it from the browser.
+
+The SDK packages (`@helixid/sdk-js`, `@helixid/widget`) resolve as ordinary git
+dependencies on the public `helixid/helix-sdk-js` repo during `pnpm install`
+inside the image. No vendoring, no sibling directories.
 
 An LLM API key is optional. The demo supports Gemini, OpenAI, and Anthropic
 without changing application code:
@@ -84,6 +110,13 @@ chat page, either SP, the widget, an MCP request, a VC, or a VP.
 If `LLM_API_KEY` is empty or absent, the agent automatically uses its
 deterministic scripted planner. The same chat, tool validation, consent, VP,
 and grant-reuse paths still run, so the demo remains usable offline and in CI.
+
+> **No LLM key, or the provider is down?** This demo keeps working — it falls
+> back to a deterministic scripted planner and the chat header switches to
+> `Scripted planner`. The consent and grant flow, which is the point of the
+> demo, does not involve the LLM at all.
+>
+> Ports, sign-ins and troubleshooting for every demo: [`../README.md`](../README.md).
 
 ### Browser demo
 

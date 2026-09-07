@@ -65,12 +65,39 @@ Browser ◀── "Booked, BKG-…"  or  "refused: lacks write:orders" ── Ag
 
 ## Run it
 
+You need **this repo and Docker. Nothing else** — no second checkout, no
+pre-built sibling packages, no registry credentials:
+
 ```sh
-cd examples/e2e-travel-concierge
+git clone https://github.com/helixid/helixid.git
+cd helixid/examples/e2e-travel-concierge
 cp .env.example .env
-#   edit .env → set LLM_API_KEY (and LLM_PROVIDER=openai|azure if you prefer)
+#   edit .env → set LLM_API_KEY
+#   LLM_PROVIDER is anthropic by default; openai | azure | gemini also work
 docker compose up --build
 ```
+
+### What `docker compose up` actually does
+
+Some services are built from this repo, one is pulled ready-made:
+
+| Service | Where it comes from | Why |
+|---|---|---|
+| `helix-api` | built from this repo's root `Dockerfile` | it's the thing being demoed — you're running the code you just cloned |
+| `helixid-setup`, `mcp-server`, `agent` | built from `docker/node.Dockerfile` | demo code, lives here |
+| `web` | built from `web/` | the chat UI, lives here |
+| `console` | **pulled** from Docker Hub (`helixid/console`) | the Console is a separate repo (`helixid/helix-console`) that publishes a multi-arch image, so there's no reason to make you clone and build it |
+
+The Console step is worth spelling out, because it's the one that used to
+require a second checkout. `docker/console.Dockerfile` is two lines: it starts
+`FROM helixid/console:latest` and copies in `docker/console-nginx.conf`. That
+nginx config serves the Console SPA and reverse-proxies `/v1` and `/health` to
+`helix-api`, so the browser talks to the API **same-origin** — the demo API
+ships without CORS, and the Console calls it from the browser.
+
+The SDK packages (`@helixid/sdk-js`, `@helixid/mcp`) resolve as ordinary git
+dependencies on the public `helixid/helix-sdk-js` repo during `pnpm install`
+inside the image. No vendoring, no sibling directories.
 
 Wait for `helixid-setup` to print `Seed complete` and exit. Then open:
 
@@ -78,6 +105,13 @@ Wait for `helixid-setup` to print `Seed complete` and exit. Then open:
 | --- | --- |
 | http://localhost:8090 | **Web chat** — pick the acting agent, talk to it |
 | http://localhost:8080 | **Console** — log in `admin` / `admin`, open **Audit** |
+
+> **If the chat shows a provider error:** this demo has no scripted fallback,
+> so an LLM outage stops it. The free Gemini tier returns `503 UNAVAILABLE`
+> under load and rate-limits quickly — prefer `anthropic` or `openai`. To
+> confirm the trust layer regardless, use the no-LLM check further down.
+>
+> Ports, sign-ins and troubleshooting for every demo: [`../README.md`](../README.md).
 
 ## Guided use cases
 

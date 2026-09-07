@@ -26,7 +26,7 @@ If you operate HelixID in production on a pinned older release and need backport
 Use one of these two channels — whichever you prefer:
 
 1. **Email:** `hello@dgverse.in`
-2. **GitHub Security Advisory:** Use the "Report a vulnerability" button under the **Security** tab of the [HelixID repository](https://github.com/dgverse-labs/helixid/security/advisories). This opens a private advisory visible only to repository maintainers.
+2. **GitHub Security Advisory:** Use the "Report a vulnerability" button under the **Security** tab of the [HelixID repository](https://github.com/helixid/helixid/security/advisories). This opens a private advisory visible only to repository maintainers.
 
 Both channels are monitored. Use whichever fits your workflow.
 

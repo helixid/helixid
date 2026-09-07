@@ -38,10 +38,13 @@ def serve_sp(definition: SpDefinition, env: Env = default_env) -> None:
         # did:web base URL can be localhost, but the server should call its
         # own loopback.
         mcp_server_url=f"http://127.0.0.1:{definition.port}/api/mcp",
-        # @helixid/widget has no Python port -- its dist is served as-is,
-        # from the same sibling-repo path the JS demo vendors it from (see
-        # docker/node.Dockerfile in the JS examples for why this path).
-        widget_dist_path=os.path.join(HERE, "..", "..", "..", "..", "helix-sdk-js", "widget", "dist"),
+        # @helixid/widget has no Python port -- its pre-built browser bundle
+        # is served as-is. docker/python.Dockerfile builds it from the public
+        # helix-sdk-js repo into ../widget-dist; override WIDGET_DIST_PATH to
+        # point at your own checkout when running outside Docker.
+        widget_dist_path=os.environ.get(
+            "WIDGET_DIST_PATH", os.path.join(HERE, "..", "widget-dist")
+        ),
         audit=create_audit_emitter(
             env.helix_api_url,
             env.admin_api_key,

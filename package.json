@@ -62,7 +62,7 @@
     "overrides": {
       "fast-uri": "3.1.2",
       "protobufjs": "8.0.2",
-      "@helixid/mcp-middleware>@helixid/sdk-js": "file:../helix-sdk-js/helix-sdk-js"
+      "@helixid/mcp-middleware>@helixid/sdk-js": "github:helixid/helix-sdk-js#path:helix-sdk-js"
     }
   },
   "devDependencies": {
