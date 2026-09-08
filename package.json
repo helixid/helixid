@@ -41,7 +41,7 @@
     "@fastify/sensible": "^6.0.0",
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^5.2.6",
-    "@helixid/core": "github:helixid/helix-core",
+    "@helixid/core": "github:helixid/helix-core#7576f42f56e0c83b60feb5b6bb786ba9e0215b47",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.7.0",
     "@prisma/config": "^7.8.0",
@@ -62,12 +62,12 @@
     "overrides": {
       "fast-uri": "3.1.2",
       "protobufjs": "8.0.2",
-      "@helixid/mcp-middleware>@helixid/sdk-js": "github:helixid/helix-sdk-js#path:helix-sdk-js"
+      "@helixid/mcp-middleware>@helixid/sdk-js": "github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js"
     }
   },
   "devDependencies": {
-    "@helixid/did-hedera": "github:helixid/helix-sdk-js#path:did-hedera",
-    "@helixid/sdk-js": "github:helixid/helix-sdk-js#path:helix-sdk-js",
+    "@helixid/did-hedera": "github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:did-hedera",
+    "@helixid/sdk-js": "github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js",
     "@types/node": "^20.0.0",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^6.0.0",

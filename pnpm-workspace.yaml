@@ -12,7 +12,7 @@ packages:
 # commit, these keys' commit hash must be updated to match (pnpm install's
 # error message reports the exact expected key if it's out of sync).
 allowBuilds:
-  "@helixid/sdk-js@git+https://github.com/helixid/helix-sdk-js.git#9c59fb2664bf5e2a712122e4d166f2afbc86d147&path:helix-sdk-js": true
-  "@helixid/did-hedera@git+https://github.com/helixid/helix-sdk-js.git#9c59fb2664bf5e2a712122e4d166f2afbc86d147&path:did-hedera": true
-  "@helixid/widget@git+https://github.com/helixid/helix-sdk-js.git#9c59fb2664bf5e2a712122e4d166f2afbc86d147&path:widget": true
+  "@helixid/sdk-js@git+https://github.com/helixid/helix-sdk-js.git#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js": true
+  "@helixid/did-hedera@git+https://github.com/helixid/helix-sdk-js.git#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:did-hedera": true
+  "@helixid/widget@git+https://github.com/helixid/helix-sdk-js.git#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:widget": true
   esbuild: true

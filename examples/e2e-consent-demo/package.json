@@ -16,8 +16,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
     "@google/genai": "^2.15.0",
-    "@helixid/sdk-js": "github:helixid/helix-sdk-js#path:helix-sdk-js",
-    "@helixid/widget": "github:helixid/helix-sdk-js#path:widget",
+    "@helixid/sdk-js": "github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js",
+    "@helixid/widget": "github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:widget",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "openai": "^4.77.0",

@@ -7,7 +7,7 @@ settings:
 overrides:
   fast-uri: 3.1.2
   protobufjs: 8.0.2
-  '@helixid/mcp-middleware>@helixid/sdk-js': github:helixid/helix-sdk-js#path:helix-sdk-js
+  '@helixid/mcp-middleware>@helixid/sdk-js': github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js
 
 importers:
 
@@ -23,7 +23,7 @@ importers:
         specifier: ^5.2.6
         version: 5.2.6
       '@helixid/core':
-        specifier: github:helixid/helix-core
+        specifier: github:helixid/helix-core#7576f42f56e0c83b60feb5b6bb786ba9e0215b47
         version: https://codeload.github.com/helixid/helix-core/tar.gz/7576f42f56e0c83b60feb5b6bb786ba9e0215b47(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
       '@prisma/adapter-pg':
         specifier: ^7.8.0
@@ -48,10 +48,10 @@ importers:
         version: 8.23.0
     devDependencies:
       '@helixid/did-hedera':
-        specifier: github:helixid/helix-sdk-js#path:did-hedera
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:did-hedera
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:did-hedera(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#path:helix-sdk-js
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:helix-sdk-js
       '@types/node':
         specifier: ^20.0.0
@@ -96,7 +96,7 @@ importers:
   e2e:
     devDependencies:
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#path:helix-sdk-js
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:helix-sdk-js
       '@types/node':
         specifier: ^20.0.0
@@ -111,7 +111,7 @@ importers:
   examples:
     dependencies:
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#path:helix-sdk-js
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:helix-sdk-js
 
   examples/e2e-consent-demo:
@@ -123,10 +123,10 @@ importers:
         specifier: ^2.15.0
         version: 2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#path:helix-sdk-js
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:helix-sdk-js
       '@helixid/widget':
-        specifier: github:helixid/helix-sdk-js#path:widget
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:widget
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:widget
       dotenv:
         specifier: ^17.4.2
@@ -162,10 +162,10 @@ importers:
         specifier: ^0.68.0
         version: 0.68.0(zod@3.25.76)
       '@helixid/mcp':
-        specifier: github:helixid/helix-sdk-js#path:mcp-middleware
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:mcp-middleware
         version: '@helixid/mcp-middleware@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:mcp-middleware(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))'
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#path:helix-sdk-js
+        specifier: github:helixid/helix-sdk-js#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js
         version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/d91e2370f6dafcf5306886c2c20b20828acb5d06#path:helix-sdk-js
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -1777,7 +1777,6 @@ packages:
 
   crypto-js@4.2.0:
     resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
-    deprecated: Active development of CryptoJS has been discontinued. This library is no longer maintained.
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
