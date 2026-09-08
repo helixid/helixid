@@ -12,221 +12,83 @@
 
 ---
 
-## The Problem
+## Documentation
 
-AI agents are authenticating with static API keys and bearer tokens — credentials designed for humans clicking through OAuth consent screens, not autonomous software making thousands of cross-boundary decisions per hour.
+Full documentation is at **[docs.helixid.dev](https://docs.helixid.dev)** — concepts,
+guides, and reference. This README covers only what is specific to this repository.
 
-This breaks in predictable ways:
+| | |
+|---|---|
+| **Start here** | [Introduction](https://docs.helixid.dev/) |
+| **Concepts** | [The Trust Stack](https://docs.helixid.dev/concepts/trust-stack) · [Two-Issuer Model](https://docs.helixid.dev/concepts/two-issuer-model) · [Delegation](https://docs.helixid.dev/concepts/delegation) · [Revocation](https://docs.helixid.dev/concepts/revocation) |
+| **Get started** | [Quick Start](https://docs.helixid.dev/get-started/quick-start) · [Installation & Modes](https://docs.helixid.dev/get-started/installation-and-modes) |
+| **Contributing** | [How to Contribute](https://docs.helixid.dev/contributing/how-to-contribute) · [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| **Security** | [Reporting a Vulnerability](https://docs.helixid.dev/security/reporting-a-vulnerability) · [`SECURITY.md`](SECURITY.md) |
 
-- **No delegation chain.** When Agent A spawns Agent B to call Service C, there's no standard way to prove B is authorized to act on A's behalf.
-- **No scoped authority.** API keys are all-or-nothing. An agent that needs read access to one table gets the same key as one that needs admin access to everything.
-- **No cross-org trust.** When your agent calls a third-party service, both sides rely on shared secrets and manual API key exchange. There's no way to verify authority without bilateral integration.
-- **No revocation that works.** Revoking a compromised agent means rotating keys across every service it touched.
-- **No audit trail.** "Who authorized this agent to do that?" is answered by grepping logs, not cryptographic proof.
+---
 
-HelixID fixes this by giving every AI agent a cryptographic identity — a portable, verifiable, revocable credential that works across organizational boundaries without requiring the parties to know each other in advance.
+## What this is
 
-## How It Works
+AI agents authenticate with static API keys — credentials designed for humans
+clicking through consent screens, not autonomous software making cross-boundary
+decisions. That leaves no delegation chain, no scoped authority, no cross-org
+trust, no revocation that actually works, and no cryptographic audit trail.
 
-In one sentence: **an agent carries signed credentials proving what it may do, the
-service it calls verifies them locally before acting, and every decision is
-recorded.**
+HelixID gives every agent a portable, verifiable, revocable credential instead.
+An agent carries signed credentials proving what it may do; the service it calls
+verifies them **locally** before acting; every decision is recorded.
 
 Two credentials matter, and they come from different parties:
 
-1. **Agent-Authority VC** — issued once by the HelixID issuer when the agent is
-   onboarded. This is the agent's *ceiling*: the most it could ever be allowed
-   to do.
-2. **Delegated Grant VC** — issued by the service provider after the **user**
-   logs in and consents. This is what the user actually approved, for that one
-   service.
+- **Agent-Authority VC** — issued once by the HelixID issuer at onboarding. The
+  agent's ceiling: the most it could ever be allowed to do.
+- **Delegated Grant VC** — issued by the service provider after the user logs in
+  and consents. What the user actually approved, at that one service.
 
 Authority is the **intersection** of the two. A grant can never widen what the
-issuer gave the agent, and the agent can never act beyond what the user
-approved. Both credentials live in the agent's local wallet — private keys never
-leave the agent process.
+issuer granted, and the agent can never exceed what the user approved. Private
+keys never leave the agent process.
 
-![HelixID flow — agent requests a VP from its wallet, presents it to the MCP server, the server verifies it locally, and the outcome is written to the audit log](docs/assets/helixid-flow.svg)
+> Full explanation, including why the two-issuer split matters and what
+> "offline verification" does and does not mean:
+> **[The Two-Issuer Model](https://docs.helixid.dev/concepts/two-issuer-model)** ·
+> **[The Trust Stack](https://docs.helixid.dev/concepts/trust-stack)** ·
+> **[Offline Verification](https://docs.helixid.dev/concepts/offline-verification)**
 
-Walking the diagram:
-
-| Step | What happens |
-| --- | --- |
-| **1–2** | The agent asks its wallet for a Verifiable Presentation (VP). The wallet bundles the credentials and signs — locally, no network call. |
-| **3** | The agent makes its normal tool call, with the signed VP attached. |
-| **4** | The service verifies signature, expiry, revocation, and scopes **in-process** — it never calls the issuer to ask whether this particular request is allowed. |
-| **5** | Allowed → the tool runs. Denied → an error, and the action never happens. |
-| **6** | The outcome is written to the audit log either way — approvals *and* refusals. |
-
-Step 4 is what makes this usable on a hot path and across organizations that
-have no prior integration with each other. It's also the claim most worth
-stating precisely.
-
-### What "offline verification" means here
-
-The property is: **no synchronous call to the issuer asking it to vouch for this
-specific request.** No token introspection, no authorization endpoint, nothing on
-the issuer's side that has to be awake and reasoning about this call. That is the
-real contrast with routing every request through a token-minting bridge.
-
-It does not mean literally zero network. With `did:web`, verification may make
-two HTTP reads — both static, cacheable documents, neither of them a question
-about your request:
-
-- **DID resolution** — `GET https://<issuer-domain>/.well-known/did.json` for the
-  public key. The same document every time until the key rotates; cached
-  in-process for 5 minutes.
-- **Revocation** — fetch the status list and read one bit. A single bitstring
-  covers every credential that issuer has ever signed, so it is a shared static
-  file, not a per-credential lookup.
-
-Everything else — VP and VC signatures, expiry, the delegation chain, scope
-intersection — is computed from data already inside the presentation. Zero
-network.
-
-Anchor the DID on a ledger and even those reads leave the issuer out of it:
-`did:key` carries the public key inside the identifier itself, and `did:hedera`
-(via the optional `@helixid/did-hedera` package) reads the DID document from a
-public Hedera mirror node — the issuer's own domain is never contacted.
-
-## What HelixID Does
-
-HelixID is a **5-layer trust stack** for AI agents, not just an identity library:
-
-| Layer              | What It Does                                                                                                     | How                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **1. Identity**    | Every agent gets a DID (Decentralized Identifier) bound to a cryptographic keypair                               | W3C DID (`did:web` default, `did:key` local, `did:hedera` optional) |
-| **2. Authority**   | Scoped, time-bound credentials that prove what an agent is allowed to do                                         | W3C Verifiable Credentials with delegation chains     |
-| **3. Enforcement** | Runtime verification and authorization checks at execution boundaries                                              | SDK/core verification + verifier-owned policy checks  |
-| **4. Audit**       | Ordered record of the whole chain — issuance, consent, presentation, verification, authorization, action, result | Adapter-based `audit_log` store + structured stdout/file |
-| **5. Revocation**  | Decentralized revocation read as a static, cacheable document — no per-credential call to the issuer             | Bitstring Status List |
+---
 
 ## Roles
 
-HelixID is built around three distinct actors. Each has a different relationship with the SDK and the issuer service.
+Three parties, three different jobs:
 
-| Role | Who | What they do |
+| Role | Does | Never does |
 |---|---|---|
-| **Platform Operator** | The team building the AI product | Creates issuer DID, mints bootstrap tokens, issues VCs to agents, manages revocation |
-| **AI Agent** | The autonomous software process | Holds a wallet, signs VPs, presents credentials, delegates authority to sub-agents |
-| **Service Provider** | The API or service the agent calls | Verifies incoming VPs, checks scopes, optionally issues a session JWT or caches the result |
+| **Platform Operator** | Runs the issuer, onboards agents, issues Agent-Authority VCs, revokes | Hold agent private keys |
+| **AI Agent** | Holds its wallet, signs presentations locally, presents to services | Send private keys anywhere |
+| **Service Provider** | Verifies presentations, asks the user for consent, issues Delegated Grant VCs, enforces scope | Trust an agent's self-assertion |
 
-### Platform Operator
+Each role's full walkthrough — including what to run and what to check — is in
+the docs: **[The Trust Stack](https://docs.helixid.dev/concepts/trust-stack)** and
+**[Authorization & Scopes](https://docs.helixid.dev/concepts/authorization-and-scopes)**.
 
-The operator runs the issuer service (self-hosted `helix-api` or CLI for low volume). They never touch agent private keys — they only control the issuance policy.
-
-```typescript
-// Operator: mint a bootstrap token for a new agent (authenticated operator call)
-// POST /v1/enrollment-tokens
-// { agentName, requestedScopes, maxDelegationDepth, requestedDomains }
-// → { bootstrapToken }
-
-// Operator: revoke an agent's credential
-// CLI
-helix revoke --vc-id <vcId> --status-list ./public/status/1.json --wallet issuer.enc
-```
-
-The operator's private key (issuer signing key) never leaves the issuer service. It is the trust anchor for every VC issued in their trust domain.
-
-### AI Agent
-
-The agent holds a wallet containing its DID, keypair, and credentials. All signing operations are local — no private key ever leaves the agent process.
-
-```typescript
-import { AgentWallet, VPBuilder, delegate } from '@helixid/sdk-js'
-
-// load wallet on every startup
-const wallet = await AgentWallet.loadOrCreate('./wallet.enc', process.env.WALLET_PASSPHRASE!)
-
-// build and sign a VP — fully local, no network
-const vp = await new VPBuilder({
-  credentials: [wallet.credentials[0]],   // add a consent grant VC as a second entry when one applies
-  holderDid: wallet.getDID(),
-  userDid: 'did:web:user.example.com',
-  targetService: 'orders-service',
-}).sign(wallet.getPrivateKeyHex(), `${wallet.getDID()}#key-1`)
-
-// delegate to a sub-agent — fully local, self-signed (Option A)
-const childVC = await delegate(
-  { to: 'did:key:z6Mk...sub-agent', scopes: ['read:orders'], expiresIn: 3600 },
-  wallet,
-)
-```
-
-### Service Provider
-
-The verifier never calls the issuer's API to authorize a request. `verifyVP()` computes signatures, expiry, delegation chain, and scopes from the presentation itself; the only outbound reads are static documents — the DID document (cached in-process) and, when the VC carries a `credentialStatus`, the status list. See [what "offline verification" means here](#what-offline-verification-means-here).
-
-```typescript
-import { verifyVP, SessionManager } from '@helixid/sdk-js'
-
-const result = await verifyVP(incomingVP, {
-  expectedTargetService: 'orders-service',
-})
-
-// replay protection — verifier owns this store
-const seen = await redis.get(`vpid:${result.vpId}`)
-if (seen) throw new Error('REPLAY_DETECTED')
-await redis.set(`vpid:${result.vpId}`, '1', 'EX', result.expiresInSeconds)
-
-// scope check — effectiveScopes is the enforcement field: identical to
-// privilegeScopes unless the VP carried a consent grant, in which case it is
-// the intersection of the two
-if (!result.effectiveScopes.includes('read:orders')) throw new Error('INSUFFICIENT_SCOPE')
-
-// session handling — verifier's choice, both optional
-
-// Option A: issue a short-lived JWT, agent reuses it for subsequent calls
-const session = new SessionManager({ secret: process.env.JWT_SECRET!, ttl: 600 })
-const token = await session.issue({ agentDid: result.agentDid, scopes: result.effectiveScopes })
-
-// Option B: cache the VP result by vpId, skip re-verification on repeat calls
-await cache.set(`vp:${result.vpId}`, result, { ttl: result.expiresInSeconds })
-```
-
-Neither session option is required. The verifier can re-verify the VP on every call if preferred. The SDK supports all three paths.
+---
 
 ## Architecture
 
-HelixID uses a hybrid 3-layer architecture that delivers the trust properties
-of verifiable credentials with the performance of JWTs:
+This repository is the **HelixID API** — the issuer and verifier service
+(Fastify + Prisma). It issues Agent-Authority VCs, hosts status lists for
+revocation, and records the audit trail. Verification itself happens in the
+SDK, inside the calling service, not here.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     YOUR AI AGENT                            │
-│                                                                │
-│  ┌─────────────┐   ┌──────────────┐   ┌─────────────────┐   │
-│  │  Layer 3    │   │   Layer 2    │   │    Layer 1      │   │
-│  │  Ed25519    │   │  Ephemeral   │   │   VC-Based       │   │
-│  │  Direct     │   │    JWT       │   │   Identity       │   │
-│  │  Signing    │   │  Sessions    │   │                  │   │
-│  │             │   │              │   │                  │   │
-│  │ • did:key   │   │ • Verify VC  │   │ • DID creation   │   │
-│  │ • Local dev │   │   once       │   │ • Delegated VCs  │   │
-│  │ • MCP tool  │   │ • Issue JWT  │   │ • StatusList     │   │
-│  │   auth      │   │   (5-15 min) │   │   revocation     │   │
-│  │             │   │ • Hot path   │   │ • Cross-org      │   │
-│  │  ~0.1ms     │   │  ~0.1ms/req  │   │   trust          │   │
-│  └─────────────┘   └──────────────┘   └─────────────────┘   │
-│                                                                │
-│  ┌──────────────────────────────────────────────────────┐    │
-│  │    API audit log (adapter store + stdout/file)        │    │
-│  │   Issuance · revocation · session-bridge verification │    │
-│  └──────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
+The default runtime is SQLite + an in-memory cache + `did:web`, with no external
+infrastructure. `did:hedera` and Postgres are opt-in.
 
-**Why three layers?** Different trust contexts need different tradeoffs:
+> Component-by-component architecture:
+> **[The Trust Stack](https://docs.helixid.dev/concepts/trust-stack)** ·
+> **[DIDs & Identity](https://docs.helixid.dev/concepts/dids-and-identity)** ·
+> **[Verifiable Credentials](https://docs.helixid.dev/concepts/verifiable-credentials)**
 
-- **Layer 1 (VCs)** — Use when agents cross organizational boundaries, when
-  delegation chains matter, when you need revocation and audit. This is the
-  foundation.
-- **Layer 2 (JWT sessions)** — Verify the VC once, issue a short-lived JWT
-  for subsequent calls. Best for high-frequency internal calls where you've
-  already established trust.
-- **Layer 3 (Ed25519 direct)** — For local development, MCP tool
-  authentication, and internal agent-to-tool calls where both parties share
-  a trust context.
+---
 
 ## Performance
 
@@ -588,139 +450,47 @@ pnpm --filter @helixid/api dev
 
 SQLite mode does not require running database migrations.
 
-#### Enroll an Agent
+#### Then: enroll, present, verify, delegate
 
-The onboarding flow is a single SDK round trip using a one-time **bootstrap token** (single-use, short TTL) delivered out-of-band (env var, secret manager, CI variable).
+Those steps are SDK work rather than API work, and the code differs per language.
+Rather than duplicate it here, the full walkthrough — enrolling an agent,
+building and verifying a presentation, and issuing an agent-signed child
+credential — lives with the SDK it belongs to:
 
-```typescript
-import { AgentWallet, HelixClient } from '@helixid/sdk-js'
+- **[SDK reference](https://docs.helixid.dev/sdk/sdk-js)** on the docs site
+- [helix-sdk-js](https://github.com/helixid/helix-sdk-js) · [helix-sdk-py](https://github.com/helixid/helix-sdk-py)
 
-const wallet = await AgentWallet.create('./wallet.enc', process.env.WALLET_PASSPHRASE!)
-const client = new HelixClient(process.env.HELIX_API_URL!)
+For a version you can run rather than read, the demos under
+[`examples/`](examples/) do all four end to end.
 
-const vc = await client.enroll(process.env.HELIX_BOOTSTRAP_TOKEN!, wallet)
-
-console.log(wallet.did, vc.id)
-```
-
-A bootstrap token is **not** an identity credential. It is a one-time permission slip that says: "whoever presents this may enroll one new agent with these scopes/delegation limits/domains."
-
-Creating that token is a privileged **operator policy action** (not an agent action), because it decides authority:
-
-1. Operator decides policy (`requestedScopes`, `maxDelegationDepth`, `requestedDomains`)
-2. Operator mints token via `POST /v1/enrollment-tokens` (authenticated operator call)
-3. Operator delivers token out-of-band (env var, Kubernetes Secret, CI variable, etc.)
-4. Agent SDK presents token via `client.enroll(...)` and receives VC
-
-This boundary is intentional: if agents could mint their own bootstrap tokens, identity and authorization would collapse into self-granted authority.
-
-#### Present and Verify a VP (SDK-local)
-
-```typescript
-import { AgentWallet, VPBuilder, verifyVP } from '@helixid/sdk-js';
-
-const wallet = await AgentWallet.load('agent/wallet.enc', 'change-this-passphrase');
-const credential = wallet.credentials[0];
-if (!credential) throw new Error('Wallet has no credential');
-
-const signedVP = await new VPBuilder({
-  credentials: [credential],
-  holderDid: wallet.getDID(),
-  userDid: 'did:web:user.example.com',
-  targetService: 'orders-service',
-}).sign(wallet.getPrivateKeyHex(), `${wallet.getDID()}#key-1`);
-
-const result = await verifyVP(signedVP, {
-  expectedTargetService: 'orders-service',
-});
-
-console.log(result.valid, result.agentDid, result.privilegeScopes);
-```
-
-`verifyVP()` runs in-process, with no call to the issuer's authorization logic: VP signature, VC signature, validity window, revocation (when `credentialStatus` exists), target-service checks, and delegation-chain integrity. Only DID resolution and the status-list read go over the network, and both are static-document fetches — pass `statusListResolver` to serve the list from your own cache or storage. `vpId` is returned for caller-managed replay protection. If you need a session JWT bridge, call `POST /v1/vp/verify` with `session: true`.
-
-#### Delegate Authority (SDK-local, agent-signed child)
-
-```typescript
-import { AgentWallet, delegate } from '@helixid/sdk-js';
-
-const wallet = await AgentWallet.load('agent/wallet.enc', 'change-this-passphrase');
-
-const delegatedCredential = await delegate(
-  {
-    to: 'did:key:z6Mk...delegatee',
-    scopes: ['read:analytics'],
-    expiresIn: 3600,
-    // optional: fromVC: specific issuer-backed parent VC from wallet
-  },
-  wallet,
-);
-
-console.log(
-  delegatedCredential.id,
-  delegatedCredential.credentialSubject.privilegeScopes,
-  delegatedCredential.credentialSubject.delegationDepth,
-);
-```
-
-Delegation is **Option A**: Agent A signs the child VC locally, and verifiers
-enforce chain integrity, scope subset, and max depth from the VC chain itself.
-The parent/root VC must still be issuer-backed; self-issued VCs are only for the
-quick-start path and are not accepted as a trusted delegation root. There is no
-API delegation endpoint.
+---
 
 ## Framework Integrations
 
-### LangChain / LangGraph
+The adapters live in the SDK repositories, not here:
 
-```typescript
-import { HelixIDMiddleware } from '@helixid/langchain';
+| Framework | Package | Repository |
+|---|---|---|
+| LangChain / LangGraph | `@helixid/langchain` | [helix-sdk-js](https://github.com/helixid/helix-sdk-js) |
+| MCP (middleware) | `@helixid/mcp-middleware` | [helix-sdk-js](https://github.com/helixid/helix-sdk-js) |
+| MCP (server) | `@helixid/mcp-server` | [helix-sdk-js](https://github.com/helixid/helix-sdk-js) |
+| LangChain / CrewAI / MCP (Python) | `helix_langchain`, `helix_crewai`, `helix_mcp_middleware` | [helix-sdk-py](https://github.com/helixid/helix-sdk-py) |
 
-const middleware = HelixIDMiddleware({
-  walletPassphrase: process.env.WALLET_PASSPHRASE!,
-  walletFilePath: './agent-wallet.enc',
-  userDid: 'did:web:user.example.com',
-  targetService: 'orders',
-});
-```
+Working examples of each are under [`examples/`](examples/).
 
-### MCP (Model Context Protocol)
+---
 
-```typescript
-import { attachHelixVP, helixidMCPMiddleware } from '@helixid/mcp';
+## Why not just use OAuth, JWT, or API keys?
 
-const requireHelix = helixidMCPMiddleware({
-  requiredScopes: ['read:orders'],
-});
+Short answer: HelixID does not replace OAuth. Use OAuth for sessions and simple
+internal APIs; use HelixID for cross-org trust, delegation chains, and auditable
+credentials.
 
-const outboundCall = await attachHelixVP(
-  { name: 'orders.lookup', input: { orderId: 'ORD-1001' } },
-  {
-    walletPassphrase: process.env.WALLET_PASSPHRASE!,
-    walletFilePath: './agent-wallet.enc',
-    userDid: 'did:web:user.example.com',
-    targetService: 'orders',
-  },
-);
-```
+The long answer — including "API keys + RBAC is fine", "Ed25519 signing is
+simpler", and why *verified* is not the same as *trusted* — is answered in full
+at **[Why not just use…](https://docs.helixid.dev/comparisons/why-not-just-use)**.
 
-## Why Not Just Use...
-
-### "OAuth/JWT already does this"
-
-OAuth authenticates users to services. It was not designed for autonomous agents that spawn sub-agents, cross organizational boundaries, and need offline-verifiable delegation chains. JWT claims are opaque and custom per system — there's no standard way for Service C to verify that Agent B was delegated authority from Agent A by Organization X without calling Organization X's token server. A HelixID credential carries its own proof: verifying it needs the issuer's public key and its revocation bitstring — two static documents that cache or sit on a CDN — never a live call to the issuer asking whether this request should go through.
-
-### "API keys + RBAC is fine"
-
-For single-tenant, human-supervised agents calling known APIs — sure. When agents autonomously discover and invoke services across organizations, API keys require bilateral key exchange and RBAC requires a shared permission model. Neither exists in cross-org agent-to-agent scenarios. HelixID provides portable authority that works without prior integration.
-
-### "Ed25519 signing is simpler"
-
-Ed25519 proves "this key signed this payload." HelixID proves "Organization X attests that Agent Y has Authority Z, verified by anyone, revocable at any time, with a full delegation chain." Simple signing gives you cryptographic proof of origin. VCs give you cryptographic proof of delegated authority. These are fundamentally different properties.
-
-### "Verified ≠ Trusted"
-
-Correct. Verification is necessary but not sufficient. HelixID combines identity, credentialed authority, verification at runtime, audit evidence, and revocation controls so trust decisions can be made from cryptographic proof instead of shared secrets.
+---
 
 ## Standards & Ecosystem Alignment
 
@@ -794,33 +564,25 @@ if (cached) return handleRequest(cached)
 
 The VP's own expiry (`validUntil`) naturally bounds the cache TTL. No secret management required. Use this pattern for single-verifier deployments where the cache is local to the service.
 
-## Project Structure
+## Project structure
 
 ```
 helixid/
-├── helix-core/           # Core crypto, schemas, resolver, VP/delegation/self-signed primitives
-├── helix-api/            # Fastify API: enrollment, VC lifecycle, status list, did:web, session bridge
-├── helix-sdk-js/         # SDK: AgentWallet, VPBuilder, verifyVP, delegate, HelixClient (enrollment/API ops)
-├── console/              # Operator web console — agents, enrollment, and the audit trail
-├── packages/
-│   ├── mcp/              # MCP middleware
-│   ├── langchain/        # LangChain/LangGraph integration
-│   ├── cli/              # CLI workflows
-│   ├── did-hedera/       # Hedera DID method resolver
-│   └── widget/           # Embeddable user-consent widget
-├── examples/
-│   ├── e2e-consent-demo/       # User consent across two independent SPs (Demo A)
-│   ├── e2e-travel-concierge/   # LLM agent + protected MCP tool (Demo B)
-│   ├── framework-middleware/   # Live LangChain and MCP middleware examples
-│   ├── verify-vp.ts
-│   ├── scope-check.ts
-│   ├── self-verify.ts
-│   └── revocation-check.ts
-├── e2e/                  # End-to-end test package
-├── docs/                 # Architecture flows, decisions, public surfaces, testing guides
-├── scripts/              # Setup and helper scripts
-└── docker-compose.yml    # Local API stack (sqlite+memory+did:web default)
+├── src/        # Fastify server entrypoint
+├── prisma/     # schema and migrations
+├── tests/      # unit + live suites
+├── e2e/        # end-to-end package
+├── examples/   # runnable demos — see examples/README.md
+├── scripts/    # setup and maintenance
+└── docs/       # design decisions and proposals
 ```
+
+The other components are separate repositories — see
+[The HelixID ecosystem](#the-helixid-ecosystem) below, or
+**[Project Structure](https://docs.helixid.dev/get-started/project-structure)**
+for how they fit together.
+
+---
 
 ## Contributing
 
@@ -836,6 +598,19 @@ Key areas where help is needed:
 
 - [GitHub Discussions](https://github.com/helixid/helixid/discussions) — questions, ideas, and show-and-tell
 - [GitHub Issues](https://github.com/helixid/helixid/issues) — bug reports and feature requests
+
+## The HelixID ecosystem
+
+| Repository | What it is |
+|---|---|
+| **helixid** — you are here | HelixID API — the issuer and verifier service |
+| [helix-core](https://github.com/helixid/helix-core) | `@helixid/core` — crypto, schemas, resolver, verification primitives |
+| [helix-sdk-js](https://github.com/helixid/helix-sdk-js) | JS/TS SDK, CLI, LangChain + MCP middleware, consent widget |
+| [helix-sdk-py](https://github.com/helixid/helix-sdk-py) | `helixid-sdk-py` — the Python SDK |
+| [helix-console](https://github.com/helixid/helix-console) | Operator Console SPA |
+| [helix-wiki](https://github.com/helixid/helix-wiki) | Source for [docs.helixid.dev](https://docs.helixid.dev) |
+
+---
 
 ## License
 

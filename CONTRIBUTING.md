@@ -6,6 +6,12 @@ This document covers how we work, what we expect, and where you can plug in.
 
 ---
 
+> **New to HelixID?** Read
+> [docs.helixid.dev](https://docs.helixid.dev) first — it covers the concepts
+> (DIDs, verifiable credentials, the two-issuer model, delegation, revocation)
+> that the rest of this document assumes. This file is the authoritative
+> process for *this* repository; the docs site is the orientation.
+
 ## Open-Source Scope
 
 Everything in this repository is Apache 2.0 licensed and self-hostable.
@@ -40,15 +46,15 @@ This saves time on both sides. A rejected PR after two weeks of work is a worse 
 
 ### Prerequisites
 
-- Node.js ≥ 20.x (LTS)
-- pnpm ≥ 9.x (`npm install -g pnpm`)
+- Node.js `^20.19.0 || >=22.12.0` — note 20.0–20.18 will **not** work
+- pnpm ≥ 9 (`corepack enable` — the repo pins `pnpm@9.15.2` via `packageManager`)
 - Git
-- Docker (for integration tests)
+- Docker (for the E2E demos and live tests)
 
 ### Clone and Bootstrap
 
 ```bash
-git clone https://github.com/nicedigverse/helixid.git
+git clone https://github.com/helixid/helixid.git
 cd helixid
 pnpm install
 pnpm build
@@ -57,11 +63,17 @@ pnpm build
 ### Run Tests
 
 ```bash
-pnpm test              # unit tests across all packages
-pnpm test:integration  # runs the integration suite via docker-compose
-pnpm test:interop      # W3C VC interop vectors
-pnpm bench             # performance benchmarks
+pnpm test:non-live     # the default suite — everything that needs no live infrastructure
+pnpm test:all          # the whole suite, live tests included
+pnpm test:live         # only the live tests (needs a configured .env)
+pnpm test:e2e          # the end-to-end package
+pnpm lint              # eslint
+pnpm typecheck         # prisma generate + tsc --noEmit
 ```
+
+`pnpm test:non-live` is the one to run before opening a PR. CI runs the
+workspace variants (`pnpm workspace:test:non-live`, `pnpm workspace:typecheck`),
+which also cover `examples/` and `e2e/`.
 
 ### Run E2E demo
 
@@ -72,30 +84,45 @@ docker compose up --build
 
 ### Environment Variables
 
-For local development, copy `.env.example` to `.env.local` and adjust the values you need.
+For local development, copy `.env.example` to `.env` and adjust the values you need.
 
-Never commit `.env.local` or any file containing private keys. The `.gitignore` blocks the common patterns, but do not rely on it — review your diff before committing.
+Never commit `.env` or any file containing private keys. `.gitignore` matches
+`.env*` with a `!.env.example` negation, so variants like `.env-new` and
+`.env.local` are covered too — but review your diff before committing rather
+than relying on it.
 
 ---
 
 ## Repository Structure
 
-This is a pnpm + Turborepo monorepo. Each package is independently versioned and published.
+This repository is the **HelixID API** (`@helixid/api`) — the issuer and
+verifier service. It is a pnpm workspace, but a small one: the package at the
+root plus `examples/` and `e2e/`.
 
 ```
 helixid/
-├── helix-core/           # Core crypto, schemas, resolver, verification primitives
-├── helix-api/            # Fastify API
-├── helix-sdk-js/         # JS/TS SDK
-├── packages/
-│   ├── cli/              # CLI workflows
-│   ├── langchain/        # LangChain/LangGraph adapter
-│   └── mcp/              # MCP adapter
-├── examples/             # Runnable scenarios
-└── docs/                 # Architecture and design docs
+├── src/              # Fastify server entrypoint
+├── prisma/           # schema and migrations
+├── tests/            # unit + live suites (tests/live is the live-only set)
+├── e2e/              # end-to-end package
+├── examples/         # runnable demos (see examples/README.md)
+├── scripts/          # setup and maintenance scripts
+└── docs/             # design decisions and proposals
 ```
 
-Changes touching `helix-core` and `helix-sdk-js` are the highest-stakes. They ripple through every integration. Expect stricter review and a higher test bar.
+The rest of the system lives in **separate repositories** under the same org —
+they are not directories here:
+
+| Repository | What it is |
+|---|---|
+| [`helix-core`](https://github.com/helixid/helix-core) | `@helixid/core` — crypto, schemas, resolver, verification primitives |
+| [`helix-sdk-js`](https://github.com/helixid/helix-sdk-js) | JS/TS SDK workspace — SDK, CLI, LangChain and MCP middleware, consent widget |
+| [`helix-sdk-py`](https://github.com/helixid/helix-sdk-py) | `helixid-sdk-py` — the Python SDK |
+| [`helix-console`](https://github.com/helixid/helix-console) | the operator Console SPA |
+| [`helix-wiki`](https://github.com/helixid/helix-wiki) | the documentation site at [docs.helixid.dev](https://docs.helixid.dev) |
+
+Changes in `helix-core` and `helix-sdk-js` are the highest-stakes — they ripple
+through every integration. Expect stricter review and a higher test bar there.
 
 ---
 
@@ -247,8 +274,8 @@ Only maintainers merge. Do not merge your own PR even if you have permissions.
 
 **Do not open public issues for security vulnerabilities.** Use one of:
 
-- Email `security@dgverse.io`
-- [GitHub Security Advisory](https://github.com/nicedigverse/helixid/security/advisories/new) (private)
+- Email `hello@dgverse.in`
+- [GitHub Security Advisory](https://github.com/helixid/helixid/security/advisories/new) (private)
 
 We acknowledge within 48 hours, triage within 7 business days, and practice coordinated disclosure with a default 90-day embargo. Full scope, safe-harbor terms, and response policy: [`SECURITY.md`](SECURITY.md).
 
@@ -269,12 +296,12 @@ Maintainers only, documented here for transparency:
 
 ## Community and Code of Conduct
 
-- **Discussions:** [github.com/nicedigverse/helixid/discussions](https://github.com/nicedigverse/helixid/discussions) — design questions, use cases, show-and-tell
-- **Issues:** [github.com/nicedigverse/helixid/issues](https://github.com/nicedigverse/helixid/issues) — bugs and concrete feature requests
-- **Security:** `security@dgverse.io`
-- **General contact:** `hello@dgverse.io`
+- **Discussions:** [github.com/helixid/helixid/discussions](https://github.com/helixid/helixid/discussions) — design questions, use cases, show-and-tell
+- **Issues:** [github.com/helixid/helixid/issues](https://github.com/helixid/helixid/issues) — bugs and concrete feature requests
+- **Security:** `hello@dgverse.in`
+- **General contact:** `hello@dgverse.in`
 
-We follow the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). Short version: be respectful, assume good faith, keep technical debate on technical merits, and escalate conduct concerns to `conduct@dgverse.io`.
+We follow the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). Short version: be respectful, assume good faith, keep technical debate on technical merits, and escalate conduct concerns to `hello@dgverse.in`.
 
 ---
 
