@@ -1,12 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
-import { AgentWallet, HelixClient, delegate } from '@helixid/sdk-js';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { HelixClient } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -16,9 +13,10 @@ import {
 // Agent-to-agent delegation (a "sub-agent") — distinct from the consent-grant
 // flow: here the delegator is itself an onboarded agent, delegating a subset
 // of its own privilege scopes to another agent it controls, via the SDK's
-// prepare/finalize-backed delegate() helper (payload construction happens
-// server-side; only the signature is produced locally — see
-// docs/proposal-sdk-api-only.md).
+// server-held key: delegateAuthority() has the server sign on the delegator's
+// behalf. Agent self-custody is retired, so the SDK's wallet-based delegate()
+// — which needed the delegator's private key locally — has had nothing
+// legitimate to call since.
 describe('Agent Delegation Live Integration', () => {
   let api: LiveApi;
 
@@ -38,50 +36,48 @@ describe('Agent Delegation Live Integration', () => {
       agentName: 'Live Delegator Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-delegator.agent.example.com'],
-      passphrase: 'live-delegator-passphrase',
       maxDelegationDepth: 1,
     });
 
-    const dir = await mkdtemp(join(tmpdir(), 'helix-live-subagent-'));
+    // The sub-agent is onboarded the same way: under server custody there is
+    // no such thing as an agent whose key exists only locally.
+    const subAgent = await onboardLiveAgent(api, client, {
+      agentName: 'Live Sub-Agent',
+      requestedScopes: [],
+      requestedDomains: ['https://live-subagent.agent.example.com'],
+    });
+
     try {
-      // The delegator's own wallet, holding its onboarded VC — delegate()
-      // defaults to wallet.credentials[0] as the VC it delegates from.
-      // Static AgentWallet.load() — not the instance `.load()` used elsewhere
-      // for raw decryption — because delegate() needs a real AgentWallet
-      // (wallet.getDID(), wallet.sign(), wallet.client), not plain wallet data.
-      const delegatorWallet = await AgentWallet.load(delegator.walletPath, 'live-delegator-passphrase', client);
-      const subAgentWallet = await AgentWallet.create(join(dir, 'sub-agent.json'), 'sub-agent-pw', client);
-
-      const subAgentVC = await delegate(
-        {
-          to: subAgentWallet.getDID(),
-          scopes: ['read:orders'],
-          expiresIn: 3600,
-        },
-        delegatorWallet,
+      const subAgentVC = await client.delegateAuthority(
+        delegator.did,
+        subAgent.did,
+        ['read:orders'],
+        3600,
+        { vcId: delegator.vcId },
       );
 
-      const signedVP = await buildAndSignVP(
-        [subAgentVC],
-        subAgentWallet.getDID(),
-        subAgentWallet.getPrivateKeyHex(),
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      // The sub-agent now holds two active agent credentials — its own
+      // onboarding VC and this delegated one — so the VP pins which to present.
+      const signedVP = await signVPForAgent(client, subAgent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: subAgentVC.id,
+      });
 
       const verifyRes = await http.post('/v1/vp/verify').send({ signedVP });
       expect(verifyRes.statusCode).toBe(200);
       expect(verifyRes.body).toMatchObject({
         valid: true,
-        agentDid: subAgentWallet.getDID(),
+        agentDid: subAgent.did,
         privilegeScopes: ['read:orders'],
         effectiveScopes: ['read:orders'],
       });
       expect(verifyRes.body.delegationChain).toHaveLength(2);
       expect(verifyRes.body.delegationChain[0]).toMatchObject({ subject: delegator.did });
-      expect(verifyRes.body.delegationChain[1]).toMatchObject({ subject: subAgentWallet.getDID() });
+      expect(verifyRes.body.delegationChain[1]).toMatchObject({ subject: subAgent.did });
     } finally {
       await delegator.cleanup();
-      await rm(dir, { recursive: true, force: true });
+      await subAgent.cleanup();
     }
   }, LIVE_HEDERA_TIMEOUT_MS);
 
@@ -94,23 +90,23 @@ describe('Agent Delegation Live Integration', () => {
       agentName: 'Live No-Delegation Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-no-delegation.agent.example.com'],
-      passphrase: 'live-no-delegation-passphrase',
     });
 
-    const dir = await mkdtemp(join(tmpdir(), 'helix-live-subagent-reject-'));
-    try {
-      const delegatorWallet = await AgentWallet.load(delegator.walletPath, 'live-no-delegation-passphrase', client);
-      const subAgentWallet = await AgentWallet.create(join(dir, 'sub-agent.json'), 'sub-agent-pw', client);
+    const subAgent = await onboardLiveAgent(api, client, {
+      agentName: 'Live Reject Sub-Agent',
+      requestedScopes: [],
+      requestedDomains: ['https://live-reject-subagent.agent.example.com'],
+    });
 
+    try {
       await expect(
-        delegate(
-          { to: subAgentWallet.getDID(), scopes: ['read:orders'], expiresIn: 3600 },
-          delegatorWallet,
-        ),
+        client.delegateAuthority(delegator.did, subAgent.did, ['read:orders'], 3600, {
+          vcId: delegator.vcId,
+        }),
       ).rejects.toMatchObject({ code: 'MAX_DELEGATION_DEPTH_EXCEEDED' });
     } finally {
       await delegator.cleanup();
-      await rm(dir, { recursive: true, force: true });
+      await subAgent.cleanup();
     }
   }, LIVE_HEDERA_TIMEOUT_MS);
 });

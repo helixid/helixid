@@ -3,27 +3,29 @@ import {
   HelixIDMiddleware,
   HelixIDToolWrapper,
   type StructuredToolLike,
-} from '../../packages/langchain/src/index.js';
+} from '@helixid/langchain';
 import {
+  createHelixClient,
   decodeHelixVP,
   logStep,
-  loadWalletSummary,
+  requireAgentIdentity,
   targetService,
   userDid,
   verifyWithScopes,
-  walletPassphrase,
-  walletPath,
 } from './shared.js';
 
 async function main(): Promise<void> {
-  const { wallet, credential } = await loadWalletSummary();
+  const client = createHelixClient();
+  const { agentDid, vcId } = await requireAgentIdentity();
 
-  logStep('LangChain', `Loaded wallet for ${wallet.did}.`);
-  logStep('LangChain', `Using VC ${credential.vcId} for target service ${targetService}.`);
+  logStep('LangChain', `Acting as ${agentDid}.`);
+  logStep('LangChain', `Using VC ${vcId} for target service ${targetService}.`);
 
+  // The middleware asks the API to sign each VP: agent self-custody is
+  // retired, so there is no wallet file to point it at.
   const middleware = HelixIDMiddleware({
-    walletPassphrase,
-    walletFilePath: walletPath,
+    client,
+    agentDid,
     userDid,
     targetService,
   });
@@ -60,8 +62,8 @@ async function main(): Promise<void> {
   };
 
   const wrappedTool = HelixIDToolWrapper(ordersTool, {
-    walletPassphrase,
-    walletFilePath: walletPath,
+    client,
+    agentDid,
     userDid,
     targetService,
   });

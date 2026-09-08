@@ -5,7 +5,7 @@ import type { SignedVC } from '@helixid/sdk-js';
 import { verifyJWT } from '@helixid/core';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -31,17 +31,15 @@ describe('JWT Session Live Integration', () => {
       agentName: 'Live JWT Session Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-jwt-session.agent.example.com'],
-      passphrase: 'live-jwt-session-passphrase',
     });
 
     try {
       const vcRecord = await client.getVC(agent.vcId);
-      const signedVP = await buildAndSignVP(
-        [vcRecord.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-book-buyer' },
-      );
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-book-buyer',
+        vcId: agent.vcId,
+      });
 
       const verifyRes = await http.post('/v1/vp/verify').send({ signedVP, session: true });
       expect(verifyRes.statusCode).toBe(200);

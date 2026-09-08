@@ -4,7 +4,7 @@ import { HelixClient, generateKeyPair, issueGrant, publicKeyToMultibase } from '
 import type { SignedVC } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -38,7 +38,6 @@ describe('Consent Grant Live Integration', () => {
       agentName: 'Live Consent Grant Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-consent.agent.example.com'],
-      passphrase: 'live-consent-passphrase',
     });
 
     try {
@@ -68,12 +67,14 @@ describe('Consent Grant Live Integration', () => {
       );
 
       const vcRecord = await client.getVC(agent.vcId);
-      const signedVP = await buildAndSignVP(
-        [vcRecord.vc as SignedVC, grantVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid },
-      );
+      // The grant travels as a separate credential — never merged into the
+      // agent credential's own delegation chain.
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid,
+        grantVC,
+        vcId: agent.vcId,
+      });
 
       const verifyRes = await http.post('/v1/vp/verify').send({ signedVP });
       expect(verifyRes.statusCode).toBe(200);
@@ -96,7 +97,6 @@ describe('Consent Grant Live Integration', () => {
       agentName: 'Live Consent Mismatch Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-consent-mismatch.agent.example.com'],
-      passphrase: 'live-consent-mismatch-passphrase',
     });
 
     try {
@@ -119,12 +119,12 @@ describe('Consent Grant Live Integration', () => {
 
       const vcRecord = await client.getVC(agent.vcId);
       // Signed as if acting for a *different* user than the grant covers.
-      const signedVP = await buildAndSignVP(
-        [vcRecord.vc as SignedVC, grantVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:key:zSomeoneElseEntirely' },
-      );
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:key:zSomeoneElseEntirely',
+        grantVC,
+        vcId: agent.vcId,
+      });
 
       const verifyRes = await http.post('/v1/vp/verify').send({ signedVP });
       expect(verifyRes.statusCode).toBe(400);

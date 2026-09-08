@@ -4,7 +4,7 @@ import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -30,18 +30,16 @@ describe('VC Revocation Live Integration', () => {
       agentName: 'Live Revocation Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-revocation.agent.example.com'],
-      passphrase: 'live-revocation-passphrase',
     });
 
     try {
       const vcRecord = await client.getVC(agent.vcId);
 
-      const signedVP = await buildAndSignVP(
-        [vcRecord.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: agent.vcId,
+      });
 
       const unauthenticatedRevoke = await http.post(`/v1/vcs/${agent.vcId}/revoke`).send({});
       expect(unauthenticatedRevoke.statusCode).toBe(403);

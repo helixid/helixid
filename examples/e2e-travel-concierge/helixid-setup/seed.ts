@@ -63,7 +63,7 @@ async function main(): Promise<void> {
   log('Helix ID', `Issued credential ${vcId}.`);
   log('Agent', `DID: ${did}`);
   log('Agent', `Scopes: ${persona.scopes.join(', ')}`);
-  log('Agent', `Encrypted wallet written to ${persona.walletFile}.`);
+  log('Agent', `Agent DID ${persona.agentDid} — key held by the platform, not written locally.`);
   log('Setup', `Seed complete. Token, enrollment and issuance events are now in Console → Audit (${CONSOLE_URL}).`);
 }
 

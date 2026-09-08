@@ -4,7 +4,7 @@ import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -34,7 +34,6 @@ describe('VC Renewal Live Integration', () => {
       agentName: 'Live Renewal Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-renewal.agent.example.com'],
-      passphrase: 'live-renewal-passphrase',
     });
 
     try {
@@ -53,12 +52,13 @@ describe('VC Renewal Live Integration', () => {
 
       // The old VC still verifies with its original (wider) scopes — renewal
       // doesn't revoke it, it's a separate credential lineage.
-      const oldSignedVP = await buildAndSignVP(
-        [oldVcDetails.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      // Both the original and the renewed credential are active, so each VP
+      // pins the one it is presenting.
+      const oldSignedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: agent.vcId,
+      });
       const oldVerifyRes = await http.post('/v1/vp/verify').send({ signedVP: oldSignedVP });
       expect(oldVerifyRes.statusCode).toBe(200);
       expect(oldVerifyRes.body.privilegeScopes).toEqual(
@@ -66,12 +66,11 @@ describe('VC Renewal Live Integration', () => {
       );
 
       // The new (renewed) VC verifies too, with the narrowed scopes.
-      const newSignedVP = await buildAndSignVP(
-        [renewed.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      const newSignedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: renewed.vcId,
+      });
       const newVerifyRes = await http.post('/v1/vp/verify').send({ signedVP: newSignedVP });
       expect(newVerifyRes.statusCode).toBe(200);
       expect(newVerifyRes.body.privilegeScopes).toEqual(['read:orders']);
@@ -87,7 +86,6 @@ describe('VC Renewal Live Integration', () => {
       agentName: 'Live Renewal Revoked Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-renewal-revoked.agent.example.com'],
-      passphrase: 'live-renewal-revoked-passphrase',
     });
 
     try {

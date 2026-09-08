@@ -8,13 +8,7 @@ import type { Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  createEd25519Proof,
-  generateKeyPair,
-  publicKeyToMultibase,
-  AgentWallet,
-  type SignedVC,
-} from '@helixid/sdk-js';
+import { HelixClient, type SignedVC } from '@helixid/sdk-js';
 import {
   AGENT_PRIVILEGE_SCOPES,
   AIRLINE,
@@ -24,7 +18,7 @@ import {
 import { createSpApp, type SpApp } from '../sp-shared/app.js';
 import { provisionSpIdentity, statePath } from '../sp-shared/identity.js';
 import { SpStore } from '../sp-shared/store.js';
-import { startLiveApi } from '../../../tests/utils/liveApi.js';
+import { onboardLiveAgent, startLiveApi } from '../../../tests/utils/liveApi.js';
 
 export interface RunningSp {
   spApp: SpApp;
@@ -41,9 +35,11 @@ export interface Harness {
   workDir: string;
   airline: RunningSp;
   hotel: RunningSp;
-  wallet: AgentWallet;
+  /** Signs presentations on the agent's behalf and reads its held grants. */
+  client: HelixClient;
   agentDid: string;
-  platformDid: string;
+  /** The live API's configured issuer DID, when it reports one. */
+  platformDid: string | undefined;
   /** The live helix-api instance backing both SPs' verifyVP/issueGrant calls. */
   helixApiUrl: string;
   stop: () => Promise<void>;
@@ -94,41 +90,43 @@ async function startSp(
   };
 }
 
-/** Issues a platform-signed agent VC into a fresh file-backed wallet. */
-export async function makeEnrolledWallet(
-  workDir: string,
-  scopes: string[] = [...AGENT_PRIVILEGE_SCOPES],
-  fileName = 'agent.enc',
-): Promise<{ wallet: AgentWallet; agentDid: string; platformDid: string }> {
-  const platform = generateKeyPair();
-  const platformDid = `did:key:${publicKeyToMultibase(platform.publicKey)}`;
-  const wallet = await AgentWallet.create(join(workDir, fileName), 'demo-passphrase');
-  const agentDid = wallet.did;
+/**
+ * Every consent grant the platform holds for this agent and user.
+ *
+ * Replaces the wallet's own credential list: agent self-custody is retired,
+ * so grants live on the platform, recorded when the issuing SP finalizes
+ * them. listVCs() returns summaries without a credentialSubject, so each
+ * active credential is read back in full.
+ */
+export async function heldGrants(
+  client: HelixClient,
+  agentDid: string,
+  userDid: string,
+): Promise<SignedVC[]> {
+  const summaries = await client.listVCs({ subjectDid: agentDid, status: 'active' });
+  const grants: SignedVC[] = [];
+  for (const summary of summaries) {
+    const vc = (await client.getVC(summary.vcId)).vc as SignedVC | undefined;
+    if (!vc || !(vc.type as string[]).includes('DelegationGrantCredential')) continue;
+    if ((vc.credentialSubject as unknown as { userDid?: string }).userDid === userDid) {
+      grants.push(vc);
+    }
+  }
+  return grants;
+}
 
-  const now = Date.now();
-  const payload = {
-    '@context': ['https://www.w3.org/ns/credentials/v2', 'https://helixid.io/contexts/v1'],
-    id: `vc:helix:agent:${agentDid.slice(-10)}`,
-    type: ['VerifiableCredential', 'HelixAgentCredential'],
-    issuer: platformDid,
-    validFrom: new Date(now - 60_000).toISOString(),
-    validUntil: new Date(now + 24 * 3600_000).toISOString(),
-    credentialSubject: {
-      id: agentDid,
-      type: 'HelixAgent',
-      privilegeScopes: scopes,
-      agentName: 'Travel Planner Agent',
-      delegationDepth: 0,
-      maxDelegationDepth: 0,
-    },
-  };
-  const agentVC = {
-    ...payload,
-    proof: await createEd25519Proof(payload, platform.privateKey, `${platformDid}#key-1`),
-  } as SignedVC;
-
-  await wallet.addCredential(agentVC);
-  return { wallet, agentDid, platformDid };
+/** The platform's standing grant for one SP, if any. */
+export async function heldGrant(
+  client: HelixClient,
+  agentDid: string,
+  serviceDid: string,
+  userDid: string,
+): Promise<SignedVC | undefined> {
+  const grants = await heldGrants(client, agentDid, userDid);
+  return grants.find((vc) => {
+    const subject = vc.credentialSubject as unknown as { serviceDid?: string };
+    return (subject.serviceDid ?? vc.issuer) === serviceDid;
+  });
 }
 
 export async function startHarness(airlinePort: number, hotelPort: number): Promise<Harness> {
@@ -139,15 +137,21 @@ export async function startHarness(airlinePort: number, hotelPort: number): Prom
   const api = await startLiveApi();
   const airline = await startSp(workDir, AIRLINE, airlinePort, api.baseUrl);
   const hotel = await startSp(workDir, HOTEL, hotelPort, api.baseUrl);
-  const { wallet, agentDid, platformDid } = await makeEnrolledWallet(workDir);
+  // A real onboarded agent: the API holds its key, so it must know about it.
+  const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
+  const agent = await onboardLiveAgent(api, client, {
+    agentName: 'Travel Planner Agent',
+    requestedScopes: [...AGENT_PRIVILEGE_SCOPES],
+    requestedDomains: ['https://travel-planner.agent.example.com'],
+  });
 
   return {
     workDir,
     airline,
     hotel,
-    wallet,
-    agentDid,
-    platformDid,
+    client,
+    agentDid: agent.did,
+    platformDid: api.issuerDid,
     helixApiUrl: api.baseUrl,
     stop: async () => {
       await new Promise<void>((resolve) => airline.server.close(() => resolve()));

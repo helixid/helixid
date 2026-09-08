@@ -233,9 +233,14 @@ await app.register(vcRoutes, {
   vcService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
+// vcService is required as of core's grant-persistence change: /grant/finalize
+// now registers the SP-signed consent credential so the platform holds it.
+// Agent self-custody is retired, so there is no agent-side wallet left that
+// could hold it instead.
 await app.register(preparedPayloadRoutes, {
   prefix: '/v1/vcs',
   preparedPayloadService,
+  vcService,
 });
 await app.register(statusListRoutes, {
   prefix: '/v1/status-list',

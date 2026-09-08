@@ -11,7 +11,9 @@
     "agent": "tsx agent/server.ts",
     "test": "vitest run",
     "test:non-live": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync-mirrors": "node scripts/sync-mirrors.mjs",
+    "pretest": "node scripts/sync-mirrors.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

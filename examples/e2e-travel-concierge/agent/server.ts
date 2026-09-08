@@ -10,7 +10,7 @@
 // remains the source of truth for enrollment, scopes, revocation, and audit.
 import 'dotenv/config';
 import express from 'express';
-import { AgentWallet, HelixClient, delegate } from '@helixid/sdk-js';
+import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC } from '@helixid/sdk-js';
 import { runChatTurn } from './chat/runChatTurn.js';
 import { LlmError } from './chat/providers/llmError.js';
@@ -61,8 +61,25 @@ function canSatisfyDelegationPersona(vc: SignedVC, scopes: string[], maxDelegati
   return maxDelegationDepth <= 0 || isIssuerBackedRootCredential(vc);
 }
 
-function findDelegationSourceCredential(wallet: AgentWallet, scopes: string[]): SignedVC | undefined {
-  const candidates = wallet.credentials.filter((vc) => {
+/**
+ * Every active credential the platform holds for an agent.
+ *
+ * Replaces reading wallet.credentials: agent self-custody is retired, so the
+ * platform is the only place a persona's credentials exist. listVCs() returns
+ * summaries without a credentialSubject, so each is read back in full.
+ */
+async function activeCredentials(client: HelixClient, agentDid: string): Promise<SignedVC[]> {
+  const summaries = await client.listVCs({ subjectDid: agentDid, status: 'active' });
+  const credentials: SignedVC[] = [];
+  for (const summary of summaries) {
+    const vc = (await client.getVC(summary.vcId)).vc as SignedVC | undefined;
+    if (vc) credentials.push(vc);
+  }
+  return credentials;
+}
+
+function findDelegationSourceCredential(credentials: SignedVC[], scopes: string[]): SignedVC | undefined {
+  const candidates = credentials.filter((vc) => {
     const availableScopes = new Set(vcScopes(vc));
     return (
       scopes.every((scope) => availableScopes.has(scope)) &&
@@ -203,13 +220,12 @@ app.post('/revoke-agent', async (req, res) => {
   }
 
   try {
-    const wallet = await AgentWallet.load(persona.walletFile, env.walletPassphrase);
-    const vc = wallet.credentials[0];
+    const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
+    const vc = (await activeCredentials(client, persona.agentDid))[0];
     if (!vc?.id) {
       return res.status(409).json({ error: `Persona "${personaId}" has no credential to revoke` });
     }
 
-    const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
     const result = await client.revokeVC(vc.id);
     console.log(`[Agent] Revoked persona "${persona.id}" credential ${vc.id}.`);
     return res.json({
@@ -233,8 +249,8 @@ async function ensureDelegationPersona(input: {
 }) {
   const existing = getPersona(input.id);
   if (existing) {
-    const wallet = await AgentWallet.load(existing.walletFile, env.walletPassphrase);
-    const matchingCredential = wallet.credentials.find((vc) =>
+    const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
+    const matchingCredential = (await activeCredentials(client, existing.agentDid)).find((vc) =>
       canSatisfyDelegationPersona(vc, input.scopes, input.maxDelegationDepth),
     );
     if (matchingCredential) {
@@ -309,14 +325,14 @@ app.post('/delegate-agent', async (req, res) => {
   if (!toPersona) return res.status(404).json({ error: `Unknown target persona: ${toPersonaId}` });
 
   try {
-    // delegate() calls wallet.client.prepareDelegation/finalizeDelegation
-    // (the SDK-API-only prepare/finalize pattern) -- the source wallet needs
-    // a HelixClient attached, same as the other routes in this file that
-    // talk to helix-api.
+    // delegateAuthority() authorizes the API to sign on the delegator's
+    // behalf. The wallet-based delegate() needed the delegator's own private
+    // key, which no longer exists anywhere outside the server.
     const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
-    const fromWallet = await AgentWallet.load(fromPersona.walletFile, env.walletPassphrase, client);
-    const toWallet = await AgentWallet.load(toPersona.walletFile, env.walletPassphrase);
-    const fromVC = findDelegationSourceCredential(fromWallet, scopes);
+    const fromVC = findDelegationSourceCredential(
+      await activeCredentials(client, fromPersona.agentDid),
+      scopes,
+    );
     if (!fromVC) {
       return res.status(409).json({
         error:
@@ -324,18 +340,15 @@ app.post('/delegate-agent', async (req, res) => {
           'Click "Create demo agents" to refresh the demo credentials, then delegate again.',
       });
     }
-    const childVC = await delegate(
-      {
-        to: toWallet.getDID(),
-        scopes,
-        expiresIn: 60 * 60,
-        fromVC,
-      },
-      fromWallet,
+    // The delegated credential is persisted by the platform as part of
+    // finalizing it, so there is nothing to store on the target's side.
+    const childVC = await client.delegateAuthority(
+      fromPersona.agentDid,
+      toPersona.agentDid,
+      scopes,
+      60 * 60,
+      { vcId: fromVC.id },
     );
-
-    const existing = toWallet.credentials.find((vc) => vc.id === childVC.id);
-    if (!existing) await toWallet.addCredential(childVC);
 
     const updatedTarget = await updatePersona(toPersona.id, {
       activeCredentialId: childVC.id,

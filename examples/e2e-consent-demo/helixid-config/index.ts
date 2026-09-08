@@ -128,6 +128,23 @@ export const AGENT_PRIVILEGE_SCOPES: string[] = [
  */
 export const DEMO_USER_DID = 'did:web:traveler.example';
 
+/**
+ * The agent's onboarding result, as recorded by the seeder.
+ *
+ * Agent self-custody is retired: onboarding returns only { agentDid, vcId }
+ * and the private key never leaves the server, so there is no wallet file
+ * whose existence used to imply the agent's DID. The seeder writes this file
+ * instead, and the agent server reads it on boot.
+ */
+export interface AgentIdentity {
+  agentDid: string;
+  vcId: string;
+}
+
+export function agentIdentityPath(walletsDir: string, agentId: string): string {
+  return `${walletsDir}/${agentId}.agent.json`;
+}
+
 export const env = {
   host: process.env['DEMO_HOST'] ?? 'localhost',
   helixApiUrl: process.env['HELIX_API_URL'] ?? 'http://helix-api:3000',

@@ -1,14 +1,20 @@
 // Travel Planner Agent.
 //
-// The agent holds a wallet and calls SP tools. It has no consent logic of its
-// own: when an SP answers "not without a grant", the agent hands the user off
-// to that SP's consent page and waits for the grant to come back.
+// The agent calls SP tools. It has no consent logic of its own: when an SP
+// answers "not without a grant", the agent hands the user off to that SP's
+// consent page and waits for the grant to come back.
 //
-// How the grant reaches the wallet in the browser flow:
+// The agent holds no wallet and no key. Agent self-custody is retired, so it
+// knows only its own DID (recorded by the seeder), asks the API to sign every
+// presentation, and reads its grants from the platform, which records them
+// when the issuing SP finalizes them.
+//
+// How the grant becomes usable in the browser flow:
 //   1. POST /api/call     -> { status: 'consent_required', consentUrl }
 //   2. the UI opens consentUrl (the SP's own page, on the SP's own origin)
 //   3. the page posts the signed grant back via postMessage
-//   4. the UI forwards it to POST /api/grants, which stores it in the wallet
+//   4. the UI forwards it to POST /api/grants, which acknowledges it -- the
+//      platform already holds it, so there is nothing agent-side to store
 //   5. the UI retries POST /api/call, which now finds the grant and succeeds
 //
 // Step 5 of the demo flow short-circuits all of that: /api/call finds the
@@ -20,10 +26,18 @@
 import 'dotenv/config';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { AgentWallet, HelixClient } from '@helixid/sdk-js';
+import { readFile } from 'node:fs/promises';
+import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC } from '@helixid/sdk-js';
-import { AIRLINE, DEMO_USER_DID, HOTEL, env, spDidFor } from '../helixid-config/index.js';
+import {
+  AIRLINE,
+  DEMO_USER_DID,
+  HOTEL,
+  agentIdentityPath,
+  env,
+  spDidFor,
+  type AgentIdentity,
+} from '../helixid-config/index.js';
 import { callSpTool, ConsentDeclinedError } from './consentAwareCall.js';
 import { agentPageHtml } from './web.js';
 import {
@@ -78,15 +92,22 @@ function knownFacts(profile: TripProfile): Record<string, string | number> {
 }
 
 async function main(): Promise<void> {
-  const walletFile = join(env.walletsDir, 'travel-planner.enc');
-  // The client is attached purely so the wallet can emit CONSENT_GRANTED to
-  // helix-api when a grant lands. Audit is best-effort — if helix-api is down
-  // the grant still stores and the demo still runs.
-  const wallet = await AgentWallet.load(
-    walletFile,
-    env.walletPassphrase,
-    new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey }),
-  );
+  const identityFile = agentIdentityPath(env.walletsDir, 'travel-planner');
+  let identity: AgentIdentity;
+  try {
+    identity = JSON.parse(await readFile(identityFile, 'utf8')) as AgentIdentity;
+  } catch {
+    throw new Error(
+      `No agent identity at ${identityFile}. Run the seeder before starting the agent.`,
+    );
+  }
+  const agentDid = identity.agentDid;
+
+  // The admin key is what lets this process ask the API to sign on the agent's
+  // behalf. In OSS there is no per-agent credential narrower than it -- a
+  // known scoping reduction versus self-custody, where only the agent's own
+  // key could ever sign for itself.
+  const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
   const defaultModels = {
     gemini: 'gemini-2.5-flash',
     openai: 'gpt-4o-mini',
@@ -101,7 +122,7 @@ async function main(): Promise<void> {
     : new DeterministicPlanner();
   // Always available, whatever the configured provider is doing.
   const fallbackPlanner = new DeterministicPlanner();
-  log(`wallet loaded: ${wallet.did}`);
+  log(`agent identity loaded: ${agentDid}`);
 
   const app = express();
   app.use(express.json({ limit: '2mb' }));
@@ -119,7 +140,7 @@ async function main(): Promise<void> {
 
   app.get('/api/session', (req, res) => {
     const session = sessions.get(cookies(req.headers.cookie)['agent_session'] ?? '');
-    res.json(session ? { authenticated: true, ...session, agentDid: wallet.did, planner: plannerInfo } : { authenticated: false, planner: plannerInfo });
+    res.json(session ? { authenticated: true, ...session, agentDid: agentDid, planner: plannerInfo } : { authenticated: false, planner: plannerInfo });
   });
 
   app.post('/api/login', (req, res) => {
@@ -132,7 +153,7 @@ async function main(): Promise<void> {
     sessions.set(token, { username: AGENT_USERNAME, userDid: DEMO_USER_DID });
     conversationHistory.set(token, []);
     res.setHeader('set-cookie', `agent_session=${token}; HttpOnly; SameSite=Lax; Path=/`);
-    res.json({ authenticated: true, username: AGENT_USERNAME, userDid: DEMO_USER_DID, agentDid: wallet.did, planner: plannerInfo });
+    res.json({ authenticated: true, username: AGENT_USERNAME, userDid: DEMO_USER_DID, agentDid: agentDid, planner: plannerInfo });
   });
 
   app.post('/api/logout', (req, res) => {
@@ -156,7 +177,7 @@ async function main(): Promise<void> {
   });
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', agentDid: wallet.did, userDid: DEMO_USER_DID, llm: plannerInfo });
+    res.json({ status: 'ok', agentDid: agentDid, userDid: DEMO_USER_DID, llm: plannerInfo });
   });
 
   /** Appends one exchange to the rolling planner history. */
@@ -338,27 +359,60 @@ async function main(): Promise<void> {
     });
   });
 
-  /** Everything the UI needs to render current authorization state. */
-  app.get('/api/state', (_req, res) => {
-    const grants = Object.values(SP_BY_ID).map((sp) => {
-      const serviceDid = spDidFor(env.host, sp.port);
-      const held = wallet.selectGrant(serviceDid, DEMO_USER_DID);
-      // Surface the actual granted scopes and durability so the UI can show
-      // what the user consented to, not just that they consented.
-      const subject = held
-        ? ((JSON.parse(held.vcJson) as { credentialSubject?: { scopes?: string[]; durability?: string } })
-            .credentialSubject ?? {})
-        : {};
-      return {
-        sp: sp.id,
-        displayName: sp.displayName,
-        serviceDid,
-        hasGrant: Boolean(held),
+  /**
+   * Every grant the platform currently holds for this agent and this user,
+   * keyed by the service it authorizes. One pass over the agent's active
+   * credentials, rather than one lookup per SP.
+   */
+  async function heldGrantsByService(): Promise<
+    Map<string, { scopes: string[]; durability: string | null }>
+  > {
+    const byService = new Map<string, { scopes: string[]; durability: string | null }>();
+    const summaries = await client.listVCs({ subjectDid: agentDid, status: 'active' });
+    for (const summary of summaries) {
+      const vc = (await client.getVC(summary.vcId)).vc as
+        | { type?: string[]; issuer?: string; credentialSubject?: Record<string, unknown> }
+        | undefined;
+      if (!vc?.type?.includes('DelegationGrantCredential')) continue;
+      const subject = (vc.credentialSubject ?? {}) as {
+        userDid?: string;
+        serviceDid?: string;
+        scopes?: string[];
+        durability?: string;
+      };
+      if (subject.userDid !== DEMO_USER_DID) continue;
+      const serviceDid = subject.serviceDid ?? vc.issuer;
+      if (!serviceDid) continue;
+      byService.set(serviceDid, {
         scopes: subject.scopes ?? [],
         durability: subject.durability ?? null,
-      };
-    });
-    res.json({ agentDid: wallet.did, userDid: DEMO_USER_DID, grants });
+      });
+    }
+    return byService;
+  }
+
+  /** Everything the UI needs to render current authorization state. */
+  app.get('/api/state', async (_req, res) => {
+    try {
+      const held = await heldGrantsByService();
+      const grants = Object.values(SP_BY_ID).map((sp) => {
+        const serviceDid = spDidFor(env.host, sp.port);
+        const grant = held.get(serviceDid);
+        // Surface the actual granted scopes and durability so the UI can show
+        // what the user consented to, not just that they consented.
+        return {
+          sp: sp.id,
+          displayName: sp.displayName,
+          serviceDid,
+          hasGrant: Boolean(grant),
+          scopes: grant?.scopes ?? [],
+          durability: grant?.durability ?? null,
+        };
+      });
+      res.json({ agentDid, userDid: DEMO_USER_DID, grants });
+    } catch (error) {
+      res.status(502).json({ error: (error as Error).message });
+    }
   });
 
   app.post('/api/call', async (req, res) => {
@@ -387,7 +441,8 @@ async function main(): Promise<void> {
 
     try {
       const result = await callSpTool({
-        wallet,
+        client,
+        agentDid,
         userDid: DEMO_USER_DID,
         spMcpUrl: `${baseUrl}/api/mcp`,
         serviceDid,
@@ -422,7 +477,7 @@ async function main(): Promise<void> {
           status: 'consent_required',
           sp: sp.id,
           serviceDid,
-          consentUrl: `${publicBaseUrl}/consent?agentDid=${encodeURIComponent(wallet.did)}&userDid=${encodeURIComponent(DEMO_USER_DID)}&correlationId=${encodeURIComponent(correlationId)}`,
+          consentUrl: `${publicBaseUrl}/consent?agentDid=${encodeURIComponent(agentDid)}&userDid=${encodeURIComponent(DEMO_USER_DID)}&correlationId=${encodeURIComponent(correlationId)}`,
           correlationId,
         });
         return;
@@ -431,25 +486,27 @@ async function main(): Promise<void> {
     }
   });
 
-  /** Receives a grant the SP's consent page issued, and stores it. */
-  app.post('/api/grants', async (req, res) => {
+  /**
+   * Receives a grant the SP's consent page issued.
+   *
+   * There is nothing to store: the platform recorded this grant when the SP
+   * finalized it, and /api/call reads it back from there. The route stays
+   * because the browser flow posts here, and because acknowledging it is what
+   * tells the UI it may retry the call.
+   */
+  app.post('/api/grants', (req, res) => {
     const body = req.body as { grantVC?: SignedVC };
     if (!body.grantVC) {
       res.status(400).json({ error: 'grantVC is required' });
       return;
     }
-    try {
-      await wallet.addCredential(body.grantVC);
-      log(`stored grant ${body.grantVC.id} from ${body.grantVC.issuer}`);
-      res.status(201).json({ stored: true });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
+    log(`grant ${body.grantVC.id} from ${body.grantVC.issuer} acknowledged (held by platform)`);
+    res.status(201).json({ stored: true });
   });
 
   app.listen(env.agentPort, '0.0.0.0', () => {
     log(`Travel Planner Agent listening on :${env.agentPort}`);
-    log(`agent DID ${wallet.did}`);
+    log(`agent DID ${agentDid}`);
     log(`acting for ${DEMO_USER_DID}`);
   });
 }

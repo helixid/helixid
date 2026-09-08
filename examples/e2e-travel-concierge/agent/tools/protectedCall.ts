@@ -1,8 +1,12 @@
-// The single choke point where a verifiable presentation is created. It loads
-// the *selected persona's* wallet, picks either its default credential or the
-// delegated credential selected by Use case 4, and signs a fresh VP bound to the
-// MCP server. The private key is decrypted in-process and never transmitted.
-import { AgentWallet, VPBuilder } from '@helixid/sdk-js';
+// The single choke point where a verifiable presentation is created. It asks
+// the API to sign a fresh VP bound to the MCP server, for the *selected
+// persona*, using either its default credential or the delegated credential
+// selected by Use case 4.
+//
+// Agent self-custody is retired: the persona's private key is held by the
+// server and never exists here, so this is an API call rather than a local
+// VPBuilder.sign().
+import { HelixClient } from '@helixid/sdk-js';
 import { callMcpTool } from '../mcpClient.js';
 import { TARGET_SERVICE, USER_DID, env } from '../../config.js';
 import type { Persona } from '../../personas/types.js';
@@ -17,27 +21,15 @@ export async function callProtectedTool(
   toolName: string,
   input: Record<string, unknown>,
 ): Promise<ProtectedResult> {
-  const wallet = await AgentWallet.load(persona.walletFile, env.walletPassphrase);
-  const credentials = wallet.credentials;
-  if (credentials.length === 0) {
-    throw new Error(`Persona "${persona.id}" has no credential in its wallet`);
-  }
+  const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
 
-  const vc = persona.activeCredentialId
-    ? credentials.find((candidate) => candidate.id === persona.activeCredentialId)
-    : credentials[0];
-  if (!vc) {
-    throw new Error(
-      `Persona "${persona.id}" active credential ${persona.activeCredentialId} was not found in its wallet`,
-    );
-  }
-
-  const vp = await new VPBuilder({
-    credentials: [vc],
-    holderDid: wallet.getDID(),
-    targetService: TARGET_SERVICE,
+  // With no activeCredentialId the server picks the persona's single active
+  // credential itself; once Use case 4 has delegated one, the persona holds
+  // more than one and the choice has to be explicit.
+  const vp = await client.signVP(persona.agentDid, TARGET_SERVICE, {
     userDid: USER_DID,
-  }).sign(wallet.getPrivateKeyHex(), `${wallet.getDID()}#key-1`);
+    ...(persona.activeCredentialId ? { vcId: persona.activeCredentialId } : {}),
+  });
 
   const result = await callMcpTool(toolName, { ...input, _helixVP: vp });
   // Surface the real result (success or the real rejection reason) so the model

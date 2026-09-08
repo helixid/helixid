@@ -10,9 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@helixid/langchain": "^0.1.0",
-    "@helixid/mcp": "^0.1.0",
-    "@helixid/sdk-js": "^0.1.1",
+    "@helixid/langchain": "github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:langchain",
+    "@helixid/mcp-middleware": "github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:mcp-middleware",
+    "@helixid/sdk-js": "github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js",
     "dotenv": "^17.4.2",
     "tsx": "^4.0.0"
   },

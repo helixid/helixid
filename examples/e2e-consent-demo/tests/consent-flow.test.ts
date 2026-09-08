@@ -22,7 +22,7 @@ import {
   publicKeyToMultibase,
   type SignedVC,
 } from '@helixid/sdk-js';
-import { AgentWallet } from '@helixid/sdk-js';
+import { HelixClient } from '@helixid/sdk-js';
 import {
   AGENT_PRIVILEGE_SCOPES,
   DEMO_USER_DID,
@@ -33,7 +33,8 @@ import { createSpApp, type SpApp } from '../sp-shared/app.js';
 import { provisionSpIdentity, statePath } from '../sp-shared/identity.js';
 import { SpStore } from '../sp-shared/store.js';
 import { callSpTool, type ConsentPrompt } from '../agent/consentAwareCall.js';
-import { startLiveApi, type LiveApi } from '../../../tests/utils/liveApi.js';
+import { onboardLiveAgent, startLiveApi, type LiveApi } from '../../../tests/utils/liveApi.js';
+import { heldGrant, heldGrants } from './harness.js';
 
 const AIRLINE_PORT = 14101;
 const HOTEL_PORT = 14102;
@@ -52,7 +53,7 @@ let workDir: string;
 let api: LiveApi;
 let airline: RunningSp;
 let hotel: RunningSp;
-let wallet: AgentWallet;
+let client: HelixClient;
 let agentDid: string;
 
 async function startSp(definition: SpDefinition, port: number): Promise<RunningSp> {
@@ -134,37 +135,17 @@ beforeAll(async () => {
   airline = await startSp(AIRLINE, AIRLINE_PORT);
   hotel = await startSp(HOTEL, HOTEL_PORT);
 
-  // Platform operator issues the agent's authority credential. Its scopes are
-  // the ceiling; a consent grant narrows within it, never past it.
-  const platform = generateKeyPair();
-  const platformDid = `did:key:${publicKeyToMultibase(platform.publicKey)}`;
-
-  wallet = await AgentWallet.create(join(workDir, 'agent.enc'), 'demo-passphrase');
-  agentDid = wallet.did;
-
-  const now = Date.now();
-  const agentPayload = {
-    '@context': ['https://www.w3.org/ns/credentials/v2', 'https://helixid.io/contexts/v1'],
-    id: `vc:helix:agent:${agentDid.slice(-8)}`,
-    type: ['VerifiableCredential', 'HelixAgentCredential'],
-    issuer: platformDid,
-    validFrom: new Date(now - 60_000).toISOString(),
-    validUntil: new Date(now + 24 * 3600_000).toISOString(),
-    credentialSubject: {
-      id: agentDid,
-      type: 'HelixAgent',
-      privilegeScopes: AGENT_PRIVILEGE_SCOPES,
-      agentName: 'Travel Planner Agent',
-      delegationDepth: 0,
-      maxDelegationDepth: 0,
-    },
-  };
-  const agentVC = {
-    ...agentPayload,
-    proof: await createEd25519Proof(agentPayload, platform.privateKey, `${platformDid}#key-1`),
-  } as SignedVC;
-
-  await wallet.addCredential(agentVC);
+  // The platform issues the agent's authority credential as part of
+  // onboarding. Its scopes are the ceiling; a consent grant narrows within
+  // it, never past it. Under server custody the agent has no key of its own,
+  // so the API must know this agent in order to sign for it.
+  client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
+  const agent = await onboardLiveAgent(api, client, {
+    agentName: 'Travel Planner Agent',
+    requestedScopes: [...AGENT_PRIVILEGE_SCOPES],
+    requestedDomains: ['https://travel-planner.agent.example.com'],
+  });
+  agentDid = agent.did;
 }, 60_000);
 
 afterAll(async () => {
@@ -185,7 +166,8 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
 
   it('step 2: search is open — no consent prompt, no scope failure (register D7)', async () => {
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: airline.mcpUrl,
       serviceDid: airline.serviceDid,
@@ -206,7 +188,8 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
 
   it('step 3: first Airline booking prompts for consent, issues a grant, then succeeds', async () => {
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: airline.mcpUrl,
       serviceDid: airline.serviceDid,
@@ -223,9 +206,10 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
     expect(airline.spApp.counters.grantsIssued).toBe(1);
     expect(airline.spApp.counters.scopeResolutions).toBe(1);
 
-    // The VP that succeeded carried [agentVC, grantVC] — the wallet now holds both.
-    expect(wallet.credentials).toHaveLength(2);
-    const grant = wallet.selectGrant(airline.serviceDid, DEMO_USER_DID);
+    // The VP that succeeded carried [agentVC, grantVC]. The agent holds
+    // nothing; the platform recorded the grant when the SP finalized it.
+    expect(await heldGrants(client, agentDid, DEMO_USER_DID)).toHaveLength(1);
+    const grant = await heldGrant(client, agentDid, airline.serviceDid, DEMO_USER_DID);
     expect(grant).toBeDefined();
   });
 
@@ -233,7 +217,8 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
     const airlineGrantsBefore = airline.spApp.counters.grantsIssued;
 
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: hotel.mcpUrl,
       serviceDid: hotel.serviceDid,
@@ -248,9 +233,9 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
 
     // The Airline's grant was neither used nor disturbed.
     expect(airline.spApp.counters.grantsIssued).toBe(airlineGrantsBefore);
-    const hotelGrant = wallet.selectGrant(hotel.serviceDid, DEMO_USER_DID);
-    const airlineGrant = wallet.selectGrant(airline.serviceDid, DEMO_USER_DID);
-    expect(hotelGrant?.vcId).not.toBe(airlineGrant?.vcId);
+    const hotelGrant = await heldGrant(client, agentDid, hotel.serviceDid, DEMO_USER_DID);
+    const airlineGrant = await heldGrant(client, agentDid, airline.serviceDid, DEMO_USER_DID);
+    expect(hotelGrant?.id).not.toBe(airlineGrant?.id);
   });
 
   it('step 5 (NON-NEGOTIABLE): second Airline booking reuses the standing grant — zero new grants, zero widget renders', async () => {
@@ -259,7 +244,8 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
     const consentRequiredBefore = airline.spApp.counters.consentRequired;
 
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: airline.mcpUrl,
       serviceDid: airline.serviceDid,
@@ -279,19 +265,16 @@ describe('Epic 5 — 5-step consent demo flow (Part D / Part H)', () => {
     expect(airline.spApp.counters.scopeResolutions - rendersBefore).toBe(0);
     expect(airline.spApp.counters.consentRequired - consentRequiredBefore).toBe(0);
 
-    // Still exactly one Airline grant in the wallet — reused, not re-issued.
-    expect(
-      wallet.credentials.filter((vc) =>
-        (vc.type as string[]).includes('DelegationGrantCredential'),
-      ),
-    ).toHaveLength(2); // one Airline + one Hotel
+    // Still exactly one Airline grant on the platform — reused, not re-issued.
+    expect(await heldGrants(client, agentDid, DEMO_USER_DID)).toHaveLength(2); // Airline + Hotel
   });
 
   it('step 5 also holds for a different scope covered by the same grant', async () => {
     const grantsBefore = airline.spApp.counters.grantsIssued;
 
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: airline.mcpUrl,
       serviceDid: airline.serviceDid,
@@ -404,7 +387,8 @@ describe('Epic 5 Part H — route contracts', () => {
     // Present the Airline grant to the Hotel SP by targeting the Hotel with a
     // VP the Airline grant cannot satisfy.
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: hotel.mcpUrl,
       serviceDid: hotel.serviceDid,
@@ -416,18 +400,17 @@ describe('Epic 5 Part H — route contracts', () => {
     expect(result.ok).toBe(true);
     expect(result.consentPrompted).toBe(false);
 
-    const airlineGrant = wallet.selectGrant(airline.serviceDid, DEMO_USER_DID);
-    const hotelGrant = wallet.selectGrant(hotel.serviceDid, DEMO_USER_DID);
-    const airlineIssuer = (JSON.parse(airlineGrant!.vcJson) as { issuer: string }).issuer;
-    const hotelIssuer = (JSON.parse(hotelGrant!.vcJson) as { issuer: string }).issuer;
-    expect(airlineIssuer).toBe(airline.serviceDid);
-    expect(hotelIssuer).toBe(hotel.serviceDid);
-    expect(airlineIssuer).not.toBe(hotelIssuer);
+    const airlineGrant = await heldGrant(client, agentDid, airline.serviceDid, DEMO_USER_DID);
+    const hotelGrant = await heldGrant(client, agentDid, hotel.serviceDid, DEMO_USER_DID);
+    expect(airlineGrant!.issuer).toBe(airline.serviceDid);
+    expect(hotelGrant!.issuer).toBe(hotel.serviceDid);
+    expect(airlineGrant!.issuer).not.toBe(hotelGrant!.issuer);
   });
 
   it('C1: a grant for a different End User does not satisfy the user-match rule', async () => {
     const result = await callSpTool({
-      wallet,
+      client,
+      agentDid,
       // Same agent, same SP, but a different End User than the grant captured.
       userDid: 'did:web:someone-else.example',
       spMcpUrl: airline.mcpUrl,

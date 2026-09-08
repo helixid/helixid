@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { expect } from 'vitest';
-import { AgentWallet, HelixClient, VPBuilder } from '@helixid/sdk-js';
+import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC, SignedVP } from '@helixid/sdk-js';
 import { createTestPrisma } from './prisma.js';
 
@@ -38,8 +38,11 @@ export interface LiveApi {
 export interface LiveAgent {
   did: string;
   vcId: string;
-  privateKeyHex: string;
-  walletPath: string;
+  /**
+   * Retained as a no-op so callers keep their teardown shape. Server custody
+   * creates nothing locally — no wallet file, no temp dir — so there is
+   * genuinely nothing to remove.
+   */
   cleanup(): Promise<void>;
 }
 
@@ -190,13 +193,9 @@ export async function onboardLiveAgent(
     agentName: string;
     requestedScopes: string[];
     requestedDomains: string[];
-    passphrase: string;
     maxDelegationDepth?: number;
   },
 ): Promise<LiveAgent> {
-  const dir = await mkdtemp(join(tmpdir(), 'helix-live-agent-'));
-  const walletPath = join(dir, 'agent-wallet.json');
-
   const tokenRes = await fetch(`${api.baseUrl}/v1/enrollment-tokens`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -210,43 +209,31 @@ export async function onboardLiveAgent(
   expect(tokenRes.status).toBe(201);
   const { token } = (await tokenRes.json()) as { token: string };
 
-  const challenge = await client.requestOnboardingChallenge(token, options.requestedDomains);
-  const onboarding = await client.completeOnboarding(
-    challenge.challengeId,
-    challenge.nonce,
-    options.passphrase,
-    walletPath,
-  );
-  const wallet = await new AgentWallet().load(options.passphrase, walletPath);
+  // Server custody: the API generates and holds the agent's key. Nothing
+  // local is created, so there is nothing to clean up either.
+  const { agentDid, vcId } = await client.onboardAgent(token, options.requestedDomains);
 
-  return {
-    did: onboarding.agentDid,
-    vcId: onboarding.vcId,
-    privateKeyHex: wallet.privateKeyHex,
-    walletPath,
-    cleanup: () => rm(dir, { recursive: true, force: true }),
-  };
+  return { did: agentDid, vcId, cleanup: async () => {} };
 }
 
 /**
- * Builds and signs a VP locally with the SDK's VPBuilder, the way a real
- * caller does post-SDK-API-only-migration — there is no server endpoint that
- * hands back an unsigned VP to sign anymore (`/v1/vp/template` was removed).
- * `credentials` is 1 or 2 held VCs: the agent-authority VC, optionally
- * followed by a consent grant VC.
+ * Asks the API to sign a VP on a server-custody agent's behalf.
+ *
+ * Replaces the old local VPBuilder path: with agent self-custody retired the
+ * caller never has the agent's key, so signing is an API call. The server
+ * looks up the agent's own authority VC itself — only a consent grant, which
+ * is not secret material, is passed in.
  */
-export async function buildAndSignVP(
-  credentials: SignedVC[],
-  holderDid: string,
-  privateKeyHex: string,
-  options: { targetService: string; userDid?: string },
+export async function signVPForAgent(
+  client: HelixClient,
+  agentDid: string,
+  options: { targetService: string; userDid?: string; grantVC?: SignedVC; vcId?: string },
 ): Promise<SignedVP> {
-  return new VPBuilder({
-    credentials,
-    holderDid,
-    targetService: options.targetService,
+  return client.signVP(agentDid, options.targetService, {
     ...(options.userDid !== undefined ? { userDid: options.userDid } : {}),
-  }).sign(privateKeyHex, `${holderDid}#key-1`);
+    ...(options.grantVC !== undefined ? { grantVC: options.grantVC } : {}),
+    ...(options.vcId !== undefined ? { vcId: options.vcId } : {}),
+  });
 }
 
 async function getAvailablePort(): Promise<number> {
