@@ -128,8 +128,7 @@ Open <http://localhost:4100> and sign in to the Travel Planner:
 
 The chat uses the selected LLM's native tool/function calling to choose among a
 strict allowlist of Airline and Hotel tools. Tool arguments are validated by
-the agent before execution; the LLM never receives wallet or credential
-material. The chat header shows the active provider/model, or `Scripted
+the agent before execution; the LLM never receives credential material. The chat header shows the active provider/model, or `Scripted
 fallback` when no API key is configured. The agent retains the latest 12
 planning turns within the authenticated login
 session, so route/date clarification can span multiple messages. History is
@@ -183,7 +182,7 @@ seed/            provisions both SP did:web identities + their initial status
 sp-airline/      Helix Air  — catalog: book:flights, modify:booking
 sp-hotel/        Helix Stay — catalog: book:hotel
 sp-shared/       the SP app both of the above are instances of
-agent/           wallet, VP construction, consent handoff, grant storage
+agent/           agent identity, VP requests, consent handoff
 helixid-config/  scope strings, tool catalogs, ports
 tests/           the 5-step flow, asserted end to end
 ```
@@ -210,7 +209,7 @@ places invites the two disagreeing.
 
 ```
 ✓ Credential Issued        Helix Air signs a DelegationGrantCredential
-✓ Consent Granted          it lands in the agent's wallet
+✓ Consent Granted          the platform records it against the agent
 ✓ Credential Presented     agent → Helix Air, with the tool it wants to call
 ✓ Verification Success     signatures, validity windows, revocation
 ✓ Authorization Granted    required scope present in effectiveScopes
@@ -236,7 +235,7 @@ Who emits what:
 | Emitter | Events |
 |---|---|
 | Service Provider | `VC_ISSUED`, `VC_PRESENTED`, `VP_VERIFIED`/`VP_REJECTED`, `AUTHZ_GRANTED`/`AUTHZ_DENIED`, `TOOL_INVOKED` |
-| Agent wallet | `CONSENT_GRANTED` when a grant is stored |
+| helix-api | `CONSENT_GRANTED` when the SP finalizes a grant |
 | helix-api | enrollment, DID and VC lifecycle events |
 
 The SP reports its own verdicts deliberately: recording them from the agent

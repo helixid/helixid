@@ -161,7 +161,7 @@ In both paths, the verifier owns policy/infrastructure decisions (scope checks, 
 
 ## Real Framework Middleware
 
-`framework-middleware` demonstrates the real LangChain and MCP adapters without mocking the Helix client. It uses the live Helix API, creates a real agent DID during onboarding, stores an encrypted wallet, requests real VP templates, signs VPs locally, and verifies them through the API.
+`framework-middleware` demonstrates the real LangChain and MCP adapters without mocking the Helix client. It uses the live Helix API, creates a real agent DID during onboarding, and has the API sign each presentation on that agent's behalf before verifying it through the API. Agent self-custody is retired, so there is no wallet and no local signing.
 
 Configure `.env` for the local API flow first:
 
@@ -185,4 +185,4 @@ pnpm example:middleware:langchain
 pnpm example:middleware:mcp
 ```
 
-The setup script writes `examples/framework-middleware/agent/wallet.enc`, which is ignored by that example package. The scripts log DIDs, VC ids, scopes, and verification results, but never print private keys or wallet contents.
+The setup script writes `examples/framework-middleware/agent/agent.json`, holding only the agent's DID and credential id — no key material, and ignored by that example package. The scripts log DIDs, VC ids, scopes, and verification results.

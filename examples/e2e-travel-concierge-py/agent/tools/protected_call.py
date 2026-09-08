@@ -12,8 +12,7 @@ from typing import Any, Dict
 
 from agent.mcp_client import call_mcp_tool
 from config import USER_DID, TARGET_SERVICE, env
-from helix_sdk.vp_builder import VPBuilder
-from helix_sdk.wallet import AgentWallet
+from helix_sdk.client import HelixClient
 from personas.types import Persona
 
 
@@ -24,24 +23,17 @@ class ProtectedResult:
 
 
 def call_protected_tool(persona: Persona, tool_name: str, input: Dict[str, Any]) -> ProtectedResult:
-    wallet = AgentWallet.load(persona.wallet_file, env.wallet_passphrase)
-    credentials = wallet.credentials
-    if not credentials:
-        raise RuntimeError(f'Persona "{persona.id}" has no credential in its wallet')
+    client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
 
-    vc = None
-    if persona.active_credential_id:
-        vc = next((c for c in credentials if c.get("id") == persona.active_credential_id), None)
-    else:
-        vc = credentials[0]
-    if vc is None:
-        raise RuntimeError(
-            f'Persona "{persona.id}" active credential {persona.active_credential_id} was not found in its wallet'
-        )
-
-    vp = VPBuilder(
-        credentials=[vc], holder_did=wallet.get_did(), target_service=TARGET_SERVICE, user_did=USER_DID
-    ).sign(wallet.get_private_key_hex(), f"{wallet.get_did()}#key-1")
+    # With no active_credential_id the server picks the persona's single
+    # active credential itself; once delegation has given it a second one,
+    # the choice has to be explicit.
+    vp = client.sign_vp(
+        persona.agent_did,
+        TARGET_SERVICE,
+        user_did=USER_DID,
+        vc_id=persona.active_credential_id,
+    )
 
     result = call_mcp_tool(tool_name, {**input, "_helixVP": vp})
     # Surface the real result (success or the real rejection reason) so the

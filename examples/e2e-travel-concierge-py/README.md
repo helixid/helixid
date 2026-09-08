@@ -65,7 +65,7 @@ Some services are built from this repo, one is pulled ready-made:
 |---|---|---|
 | `helix-api` | built from this repo's root `Dockerfile` | it's the thing being demoed — you're running the code you just cloned |
 | `mcp-server`, `agent` | built from `docker/python.Dockerfile` | the Python demo code, lives here |
-| `helixid-setup` | built from the TypeScript demo's `node.Dockerfile` | the seeder is shared; its wallet output is byte-for-byte compatible with `helixid-sdk-py`'s wallet format, so the Python services load it directly |
+| `helixid-setup` | built from the TypeScript demo's `node.Dockerfile` | the seeder is shared; it records each persona's DID in the manifest, and the Python services read that same shape (`agentDid`) directly |
 | `web` | built from the TypeScript demo's `web/` | the chat UI is identical, so it isn't duplicated |
 | `console` | **pulled** from Docker Hub (`helixid/console`) | the Console is a separate repo (`helixid/helix-console`) that publishes a multi-arch image, so there's no reason to make you clone and build it |
 
@@ -83,6 +83,6 @@ Nothing is vendored from a sibling directory.
 - **Docker + Docker Compose.**
 - **An LLM API key** — Anthropic (default), OpenAI, or Azure OpenAI. The agent
   is a genuine LLM agent; it decides which tool to call.
-- **No Hedera credentials.** Agents enroll with a local `did:key` wallet and
+- **No Hedera credentials.** Agents are onboarded as `did:key` identities and
   the issuer runs in `did:key` mode, so the trust flow is fully real and fully
   local.

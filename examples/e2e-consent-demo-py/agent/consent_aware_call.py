@@ -4,8 +4,12 @@
 # The agent itself has no consent logic: it never decides what the user may
 # authorize, it only notices when an SP says "not without a grant" and hands
 # off to that SP's own consent page. What makes step 5 of the demo work is
-# the first line of call_sp_tool(): before building any presentation, ask the
-# wallet whether a grant for THIS (service, user) pair already exists.
+# the first line of call_sp_tool(): before requesting any presentation, ask
+# whether a grant for THIS (service, user) pair already exists.
+#
+# Agent self-custody is retired, so "ask" now means asking the platform rather
+# than a local wallet: the SP's grant is persisted when it finalizes it, and
+# the VP is signed by the API on the agent's behalf.
 
 from __future__ import annotations
 
@@ -14,8 +18,7 @@ from typing import Any, Callable, Dict, Optional
 
 import requests
 
-from helix_sdk.vp_builder import VPBuilder
-from helix_sdk.wallet import AgentWallet
+from helix_sdk.client import HelixClient
 
 
 class ConsentDeclinedError(Exception):
@@ -24,21 +27,40 @@ class ConsentDeclinedError(Exception):
         self.name = "ConsentDeclinedError"
 
 
-def _find_existing_grant(wallet: AgentWallet, service_did: str, user_did: str) -> Optional[Dict[str, Any]]:
-    stored = wallet.select_grant(service_did, user_did)
-    return json.loads(stored.vc_json) if stored else None
+def _find_existing_grant(
+    client: HelixClient, agent_did: str, service_did: str, user_did: str
+) -> Optional[Dict[str, Any]]:
+    """The platform's standing grant for this SP and this user, if any.
+
+    There is no wallet to ask any more: the SP's DelegationGrantCredential is
+    persisted by the platform when the SP finalizes it. list_vcs() returns
+    summaries without a credentialSubject, so each active credential is read
+    back in full to match on (service, user). That is a read per credential,
+    which is fine at demo scale.
+    """
+    for summary in client.list_vcs(subject_did=agent_did, status="active"):
+        vc = (client.get_vc(summary["vcId"]) or {}).get("vc")
+        if not vc or "DelegationGrantCredential" not in (vc.get("type") or []):
+            continue
+        subject = vc.get("credentialSubject") or {}
+        if subject.get("userDid") == user_did and (subject.get("serviceDid") or vc.get("issuer")) == service_did:
+            return vc
+    return None
 
 
-def _build_vp(wallet: AgentWallet, service_did: str, user_did: str, grant: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    agent_vc = next((vc for vc in wallet.credentials if "HelixAgentCredential" in (vc.get("type") or [])), None)
-    if not agent_vc:
-        raise RuntimeError("Agent wallet holds no HelixAgentCredential. Run enrollment first.")
-
-    credentials = [agent_vc, grant] if grant else [agent_vc]
-    builder = VPBuilder(
-        credentials=credentials, holder_did=wallet.get_did(), target_service=service_did, user_did=user_did
-    )
-    return builder.sign(wallet.get_private_key_hex(), f"{wallet.get_did()}#key-1")
+def _build_vp(
+    client: HelixClient,
+    agent_did: str,
+    service_did: str,
+    user_did: str,
+    grant: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Signed by the API on the agent's behalf -- with self-custody retired
+    the agent has no key of its own. The server looks up the agent's own
+    HelixAgentCredential; the grant travels as a separate, independent
+    credential and is never merged into that credential's delegation chain.
+    """
+    return client.sign_vp(agent_did, service_did, user_did=user_did, grant_vc=grant)
 
 
 def _post_tool_call(
@@ -63,7 +85,8 @@ ConsentHandler = Callable[[Dict[str, str]], Optional[Dict[str, Any]]]
 
 
 def call_sp_tool(
-    wallet: AgentWallet,
+    client: HelixClient,
+    agent_did: str,
     user_did: str,
     sp_mcp_url: str,
     service_did: str,
@@ -74,10 +97,15 @@ def call_sp_tool(
 ) -> Dict[str, Any]:
     args = args or {}
 
-    # Step 5 hinges on this: reuse a standing grant if the wallet already has one.
-    existing_grant = _find_existing_grant(wallet, service_did, user_did)
+    # Step 5 hinges on this: reuse a standing grant if the platform already
+    # holds one for this (service, user) pair.
+    existing_grant = _find_existing_grant(client, agent_did, service_did, user_did)
     first = _post_tool_call(
-        sp_mcp_url, tool_name, args, _build_vp(wallet, service_did, user_did, existing_grant), correlation_id
+        sp_mcp_url,
+        tool_name,
+        args,
+        _build_vp(client, agent_did, service_did, user_did, existing_grant),
+        correlation_id,
     )
 
     if not first.get("error"):
@@ -111,10 +139,16 @@ def call_sp_tool(
     if not grant_vc:
         raise ConsentDeclinedError(service_did)
 
-    wallet.add_credential(grant_vc)
-
+    # No agent-side store to put it in, and none needed: the platform recorded
+    # this grant when the SP finalized it, so the next call's
+    # _find_existing_grant() will see it. Passed straight through here to
+    # avoid re-reading it.
     retry = _post_tool_call(
-        sp_mcp_url, tool_name, args, _build_vp(wallet, service_did, user_did, grant_vc), correlation_id
+        sp_mcp_url,
+        tool_name,
+        args,
+        _build_vp(client, agent_did, service_did, user_did, grant_vc),
+        correlation_id,
     )
 
     if retry.get("error"):

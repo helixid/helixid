@@ -3,11 +3,11 @@
 #
 # Public surface (browser): GET /personas, POST /chat, POST /onboard-agent, and
 # POST /revoke-agent for the guided revocation demo. The browser may carry a
-# one-time Console-generated onboarding token, but it never receives a wallet,
+# one-time Console-generated onboarding token, but it never receives a
 # VC, VP, private key, admin key, or persisted credential material.
 #
 # Runtime onboarding consumes a token minted by HelixID Console. This app only
-# keeps local persona convenience state (manifest + encrypted wallet); HelixID
+# keeps local persona convenience state (the manifest only); HelixID
 # remains the source of truth for enrollment, scopes, revocation, and audit.
 # Route contracts (paths, JSON shapes) match server.ts exactly, since the
 # static web/ frontend is reused unchanged.
@@ -25,9 +25,7 @@ from agent.chat.llm_error import LlmError
 from agent.chat.run_chat_turn import run_chat_turn
 from config import SCOPES, env
 from helix_sdk.client import HelixClient
-from helix_sdk.delegation import delegate as sdk_delegate
 from helix_sdk.proof import _to_iso_z
-from helix_sdk.wallet import AgentWallet
 from personas.enroll import EnrollInput, enroll_persona
 from personas.store import add_persona, get_persona, has_persona, list_personas, load_personas, update_persona
 from personas.types import Persona
@@ -84,9 +82,23 @@ def _can_satisfy_delegation_persona(vc: Dict[str, Any], scopes: List[str], max_d
     return max_delegation_depth <= 0 or _is_issuer_backed_root_credential(vc)
 
 
-def _find_delegation_source_credential(wallet: AgentWallet, scopes: List[str]) -> Optional[Dict[str, Any]]:
+def _active_credentials(client: HelixClient, agent_did: str) -> List[Dict[str, Any]]:
+    """Every active credential the platform holds for an agent.
+
+    Replaces reading wallet.credentials: self-custody is retired, so the
+    platform is the only place a persona's credentials exist.
+    """
+    out: List[Dict[str, Any]] = []
+    for summary in client.list_vcs(subject_did=agent_did, status="active"):
+        vc = (client.get_vc(summary["vcId"]) or {}).get("vc")
+        if vc:
+            out.append(vc)
+    return out
+
+
+def _find_delegation_source_credential(credentials: List[Dict[str, Any]], scopes: List[str]) -> Optional[Dict[str, Any]]:
     candidates = []
-    for vc in wallet.credentials:
+    for vc in credentials:
         available = set(_vc_scopes(vc))
         if all(s in available for s in scopes) and _vc_delegation_depth(vc) + 1 <= _vc_max_delegation_depth(vc):
             candidates.append(vc)
@@ -205,13 +217,12 @@ def revoke_agent():
         return jsonify({"error": f"Unknown persona: {persona_id}"}), 404
 
     try:
-        wallet = AgentWallet.load(persona.wallet_file, env.wallet_passphrase)
-        credentials = wallet.credentials
+        client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
+        credentials = _active_credentials(client, persona.agent_did)
         vc = credentials[0] if credentials else None
         if not vc or not vc.get("id"):
             return jsonify({"error": f'Persona "{persona_id}" has no credential to revoke'}), 409
 
-        client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
         result = client.revoke_vc(vc["id"])
         print(f'[Agent] Revoked persona "{persona.id}" credential {vc["id"]}.')
         return jsonify(
@@ -231,9 +242,14 @@ def revoke_agent():
 def _ensure_delegation_persona(persona_id: str, display_name: str, scopes: List[str], max_delegation_depth: int) -> Persona:
     existing = get_persona(persona_id)
     if existing:
-        wallet = AgentWallet.load(existing.wallet_file, env.wallet_passphrase)
+        client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
         matching = next(
-            (vc for vc in wallet.credentials if _can_satisfy_delegation_persona(vc, scopes, max_delegation_depth)), None
+            (
+                vc
+                for vc in _active_credentials(client, existing.agent_did)
+                if _can_satisfy_delegation_persona(vc, scopes, max_delegation_depth)
+            ),
+            None,
         )
         if matching is not None:
             if (
@@ -290,14 +306,10 @@ def delegate_agent():
         return jsonify({"error": f"Unknown target persona: {to_persona_id}"}), 404
 
     try:
-        # delegate() calls wallet.client.prepare_delegation/finalize_delegation
-        # (the SDK-API-only prepare/finalize pattern) -- the source wallet
-        # needs a HelixClient attached, same as the other routes in this file
-        # that talk to helix-api.
         client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
-        from_wallet = AgentWallet.load(from_persona.wallet_file, env.wallet_passphrase, client)
-        to_wallet = AgentWallet.load(to_persona.wallet_file, env.wallet_passphrase)
-        from_vc = _find_delegation_source_credential(from_wallet, scopes)
+        from_vc = _find_delegation_source_credential(
+            _active_credentials(client, from_persona.agent_did), scopes
+        )
         if from_vc is None:
             return (
                 jsonify(
@@ -310,11 +322,18 @@ def delegate_agent():
                 ),
                 409,
             )
-        child_vc = sdk_delegate(from_wallet, to=to_wallet.get_did(), scopes=scopes, expires_in=60 * 60, from_vc=from_vc)
-
-        existing = next((vc for vc in to_wallet.credentials if vc.get("id") == child_vc.get("id")), None)
-        if existing is None:
-            to_wallet.add_credential(child_vc)
+        # delegate_authority() authorizes the API to sign on the delegator's
+        # behalf. The wallet-based delegate() needed the delegator's own
+        # private key, which no longer exists outside the server. The platform
+        # persists the delegated credential, so there is nothing to store on
+        # the target's side.
+        child_vc = client.delegate_authority(
+            from_persona.agent_did,
+            to_persona.agent_did,
+            scopes,
+            60 * 60,
+            vc_id=from_vc.get("id"),
+        )
 
         updated_target = update_persona(
             to_persona.id, active_credential_id=child_vc.get("id"), delegated_from_persona_id=from_persona.id, delegated_scopes=scopes

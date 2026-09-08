@@ -46,8 +46,8 @@ Browser ◀── "Booked, BKG-…"  or  "refused: lacks write:orders" ── Ag
   it can search *and* book.
 - **Search Agent** (enrolled later, at runtime) holds only `read:catalog` → it can
   search, but HelixID refuses its bookings.
-- **Revoked Concierge Agent** still has the same local wallet, but its credential
-  status-list bit is flipped → HelixID rejects its next VP.
+- **Revoked Concierge Agent** is the same agent with the same DID, but its
+  credential status-list bit is flipped → HelixID rejects its next VP.
 - **Delegated Research Agent** starts with no tool scopes, then presents a child
   credential delegated by Planner Agent with only `read:catalog` → search works,
   booking is refused.
@@ -57,9 +57,10 @@ Browser ◀── "Booked, BKG-…"  or  "refused: lacks write:orders" ── Ag
 - **Docker + Docker Compose.**
 - **An LLM API key** — Anthropic (default), OpenAI, or Azure OpenAI. The agent is a
   genuine LLM agent; it decides which tool to call.
-- **No Hedera credentials.** This demo enrolls each agent with a local `did:key`
-  wallet through the single-roundtrip `/v1/enroll` path (no on-chain DID
-  anchoring), and the issuer runs in `did:key` mode. The trust flow is fully real
+- **No Hedera credentials.** This demo onboards each agent as a `did:key`
+  identity through `POST /v1/onboard` (no on-chain DID anchoring), and the issuer
+  runs in `did:key` mode. Agent self-custody is retired, so the server generates
+  and holds each agent's key — nothing writes a wallet or a private key locally. The trust flow is fully real
   and fully local. (If `did:key`/Hedera modes change upstream, only the API env in
   `docker-compose.yml` would need revisiting.)
 
@@ -143,8 +144,8 @@ agent, for example **Search Agent** with only `read:catalog`.
 Back in the Travel Concierge web chat, open **Use case 2 — Read-only agent** and
 click **Open onboarding**. Paste that Console-generated token, give it a display
 name such as `Search Agent`, and submit. The agent service consumes the token,
-creates an encrypted local wallet, and writes only local persona metadata to the
-manifest on the shared `wallets` volume. The Console/HelixID database remains the
+onboards the agent through the API, and writes only local persona metadata to the
+manifest on the shared volume. The Console/HelixID database remains the
 source of truth for the real agent credential, scopes, revocation state, and
 audit events.
 
@@ -166,17 +167,16 @@ With **Concierge Agent** selected, first run the happy-path booking so you have 
 known-good baseline. Then open **Use case 3 — Revoked credential** in the web UI
 and click **Revoke selected agent**.
 
-The Travel Concierge agent service loads the selected persona's encrypted wallet,
-reads the credential id, and calls the live HelixID admin endpoint
-`POST /v1/vcs/:vcId/revoke`. The browser never sees the wallet, VC, VP, private
-key, or admin API key.
+The Travel Concierge agent service looks up the selected persona's active
+credential through the API and calls the live HelixID admin endpoint
+`POST /v1/vcs/:vcId/revoke`. The browser never sees the VC, VP, or admin API key.
 
 Now ask Concierge to book again:
 
 > **Book flight BA249 for Ada Lovelace**
 
-The agent still signs a fresh VP with the same local wallet, but HelixID now sees
-the revoked status-list bit and refuses the presentation. Refresh Console →
+The API still signs a fresh VP for that agent, but HelixID now sees the revoked
+status-list bit and refuses the presentation. Refresh Console →
 Audit: you should see the revocation event and a rejected VP verification for the
 retry.
 
@@ -194,11 +194,12 @@ At this point, Research has a real issuer-backed base VC, but it carries an empt
 `privilegeScopes` array. That credential is useful as Research's identity, not as
 tool authority. It cannot search or book.
 
-Click **Delegate read access**. The service loads Planner's wallet server-side,
-uses Planner's HelixID-issued credential as the trusted root, creates a
-Planner-signed child VC for Research with only `read:catalog`, stores that child
-VC in Research's encrypted wallet, and marks Research to present the delegated
-credential on its next tool call. The browser receives only safe persona metadata.
+Click **Delegate read access**. The service calls `delegateAuthority()`, which
+uses Planner's HelixID-issued credential as the trusted root and has the API sign
+a child VC for Research with only `read:catalog` — Planner's key is held by the
+server, so the signature is authorized rather than produced locally. The platform
+records that child credential, and Research is marked to present it on its next
+tool call. The browser receives only safe persona metadata.
 
 With **Research Agent** selected, try:
 
@@ -231,7 +232,7 @@ curl -s http://localhost:7100/mcp \
 ### Reset
 
 ```sh
-docker compose down -v      # wipes HelixID SQLite state, wallets, and persona manifest
+docker compose down -v      # wipes HelixID SQLite state and the persona manifest
 ```
 
 ## Configuration
@@ -244,7 +245,7 @@ docker compose down -v      # wipes HelixID SQLite state, wallets, and persona m
 | `AZURE_OPENAI_DEPLOYMENT` | agent | — | `azure` only — chat deployment name (used as the model) |
 | `AZURE_OPENAI_API_VERSION` | agent | `2024-10-21` | `azure` only |
 | `HELIX_ADMIN_API_KEY` | setup, console | `dev-admin-key-change-in-production` | Demo admin key for Console/API admin surfaces |
-| `WALLET_PASSPHRASE` | setup, agent | `demo-passphrase` | Encrypts every persona wallet |
+| `HELIX_ADMIN_API_KEY` | setup, agent | `dev-admin-key-change-in-production` | Also used by the agent to sign presentations — see below |
 
 For Azure OpenAI, set `LLM_PROVIDER=azure`, put the resource key in `LLM_API_KEY`,
 and set `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` (a deployment of a
@@ -254,58 +255,64 @@ The HelixID API's identity settings (`DID_METHOD=key`, the issuer DID, the signi
 key) are fixed in `docker-compose.yml` because they must agree with each other;
 they're dev values and clearly marked.
 
-## Personas, wallets, and the browser boundary
+## Personas, key custody, and the browser boundary
 
-- A **persona** is a selectable enrolled-agent context: its own wallet, credential,
-  and scopes. The active persona's wallet signs the next protected tool call.
-- A wallet can hold multiple VCs. The demo stores the selected VC id as
+- A **persona** is a selectable onboarded-agent context: its own DID, credential,
+  and scopes. The active persona is the agent the API signs the next protected
+  tool call for.
+- **Agents hold no keys.** Self-custody is retired: the server generates each
+  agent's keypair at onboarding and holds the private key encrypted at rest, so a
+  presentation is signed by `POST /v1/agents/:did/vp` rather than locally. That
+  route is admin-gated in OSS, so the agent service holds the admin key — a real
+  reduction in scoping versus self-custody, where only the agent's own key could
+  sign for itself.
+- An agent can hold multiple VCs. The demo stores the selected VC id as
   `activeCredentialId`: normal personas use their issuer-issued base VC, while
-  delegated Research uses the Planner-signed child VC. If `activeCredentialId` is
-  missing, the demo falls back to the first wallet credential; if the wallet is
-  empty or the active VC id is not found, VP creation fails instead of silently
-  using the wrong credential.
+  delegated Research uses the Planner-delegated child VC. With no
+  `activeCredentialId` the server picks the agent's single active credential
+  itself; once delegation has given Research a second one, the choice has to be
+  explicit, and an unknown id fails rather than silently using the wrong
+  credential.
 - The persona registry is app-local convenience state for this demo: it lets the
-  Travel Concierge UI list/select agents and locate each encrypted wallet file. It
-  stores safe credential-selection metadata such as `activeCredentialId`, but not
-  the VC itself, and is deliberately separate from the Console/HelixID database.
-- The Console/HelixID database is the source of truth for enrollment,
-  issuer-backed credentials and their scopes, status lists, revocation, and API
-  audit events. Agent-issued delegated child VCs remain in the receiving agent's
-  encrypted wallet and are verified from their signed delegation chain. In a real
-  deployment, the agent app and the organization Console would be hosted
+  Travel Concierge UI list and select agents. It stores safe metadata such as the
+  agent DID and `activeCredentialId`, never the VC itself, and is deliberately
+  separate from the Console/HelixID database.
+- The Console/HelixID database is the source of truth for onboarding,
+  credentials and their scopes, status lists, revocation, and API audit events.
+  Delegated child VCs are recorded there too, so a later hop can find them. In a
+  real deployment, the agent app and the organization Console would be hosted
   separately and would not share a database.
-- The local persona registry is backed by the shared `wallets` volume today, so
-  runtime-enrolled agents survive restarts and a freshly-booted agent sees them.
-- The **browser never handles wallet material**: chat only sends `{ personaId,
-  message, conversationId }` and receives `{ reply }`. During onboarding, the
-  browser carries the one-time Console-generated token to the agent service, but
-  it never receives a wallet, VC, VP, private key, or persisted credential
-  material.
+- The local persona registry is backed by the shared volume today, so
+  runtime-onboarded agents survive restarts and a freshly-booted agent sees them.
+- The **browser never handles credential material**: chat only sends
+  `{ personaId, message, conversationId }` and receives `{ reply }`. During
+  onboarding, the browser carries the one-time Console-generated token to the
+  agent service, but it never receives a VC, VP, or admin key.
 - Conversation history is keyed by `(conversationId, personaId)`, so one agent's
   context never leaks into another's.
 
 ## Layout — one file, one job
 
 ```
-config.ts                 shared constants (scopes, tools, target service, wallets dir)
+config.ts                 shared constants (scopes, tools, target service, state dir)
 personas/                 the runtime persona model
   store.ts                manifest-backed registry (list / get / add), on the shared volume
-  enroll.ts               shared enroll (Console/setup token → did:key wallet → POST /v1/enroll)
-helixid-setup/seed.ts     run-once: enroll the Concierge persona → manifest → exit 0
+  enroll.ts               shared onboarding (Console/setup token → POST /v1/onboard)
+helixid-setup/seed.ts     run-once: onboard the Concierge persona → manifest → exit 0
 mcp-server/server.ts      real MCP server; search_flights + book_flight, each guarded by @helixid/mcp
 agent/
   server.ts               GET /personas, POST /chat, onboarding, revocation, delegation demo routes
   chat/providers/         anthropic (default) | openai | azure adapter (v1 SPEC §5.7 pattern)
   chat/runChatTurn.ts     LLM tool-loop; runs every tool call as the selected persona
-  tools/protectedCall.ts  the only place a VP is created (per-persona active credential)
+  tools/protectedCall.ts  the only place a VP is requested (per-persona active credential)
 web/                      static chat UI (nginx): persona selector + reverse-proxy to the agent
 docker/                   Dockerfiles + the Console nginx override
 ```
 
 Within the Travel Concierge application, only `helixid-setup/`, `personas/`, and
-`agent/` create, store, or sign wallet, VC, or VP material. The HelixID API issues
-and stores issuer-backed credentials; the MCP server receives and verifies VPs;
-the web app doesn't know HelixID exists.
+`agent/` request VC or VP material, and none of them ever holds a key. The
+HelixID API issues and stores credentials and signs presentations; the MCP server
+receives and verifies VPs; the web app doesn't know HelixID exists.
 
 ## Shipped-capability notes (honest caveats)
 

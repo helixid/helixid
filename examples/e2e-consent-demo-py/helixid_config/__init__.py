@@ -145,7 +145,6 @@ class Env:
     helix_api_url: str
     admin_api_key: str
     wallets_dir: str
-    wallet_passphrase: str
     agent_port: int
     airline_url: str
     hotel_url: str
@@ -162,7 +161,6 @@ def _load_env() -> Env:
         helix_api_url=os.environ.get("HELIX_API_URL", "http://helix-api:3000"),
         admin_api_key=os.environ.get("HELIX_ADMIN_API_KEY", "dev-admin-key-change-in-production"),
         wallets_dir=os.environ.get("WALLETS_DIR", "/wallets"),
-        wallet_passphrase=os.environ.get("WALLET_PASSPHRASE", "demo-passphrase"),
         agent_port=int(os.environ.get("AGENT_PORT", "4100")),
         airline_url=os.environ.get("AIRLINE_URL", f"http://{host}:{AIRLINE.port}"),
         hotel_url=os.environ.get("HOTEL_URL", f"http://{host}:{HOTEL.port}"),
@@ -180,3 +178,14 @@ def _load_env() -> Env:
 
 
 env = _load_env()
+
+
+def agent_identity_path(wallets_dir: str, agent_id: str) -> str:
+    """Where the seeder records the agent's onboarding result.
+
+    Agent self-custody is retired: onboarding returns only {agentDid, vcId}
+    and the private key never leaves the server, so there is no wallet file
+    whose existence used to imply the agent's DID. The seeder writes this
+    file instead, and the agent server reads it on boot.
+    """
+    return os.path.join(wallets_dir, f"{agent_id}.agent.json")

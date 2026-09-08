@@ -1,9 +1,12 @@
-# A "persona" is a selectable enrolled-agent context: its own wallet, its own
+# A "persona" is a selectable onboarded-agent context: its own DID, its own
 # credential, its own scopes. Switching personas in the UI switches which
-# wallet signs the next protected tool call. Python port of
+# agent the API signs the next protected tool call for. Python port of
 # ../personas/types.ts -- the JSON shape (camelCase keys) must match exactly:
-# the manifest on the shared wallets volume is written by the still-JS
-# helixid-setup seeder and read by this Python agent.
+# the manifest on the shared volume is written by the still-JS helixid-setup
+# seeder and read by this Python agent.
+#
+# Agent self-custody is retired, so a persona owns no wallet and no key -- it
+# is identified by its DID, and the server holds the key.
 
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ class Persona:
     id: str
     display_name: str
     scopes: List[str]
-    wallet_file: str
+    agent_did: str
     active_credential_id: Optional[str] = None
     delegated_from_persona_id: Optional[str] = None
     delegated_scopes: Optional[List[str]] = None
@@ -26,7 +29,7 @@ class Persona:
             "id": self.id,
             "displayName": self.display_name,
             "scopes": self.scopes,
-            "walletFile": self.wallet_file,
+            "agentDid": self.agent_did,
         }
         if self.active_credential_id is not None:
             d["activeCredentialId"] = self.active_credential_id
@@ -42,7 +45,7 @@ class Persona:
             id=d["id"],
             display_name=d["displayName"],
             scopes=list(d.get("scopes") or []),
-            wallet_file=d["walletFile"],
+            agent_did=d["agentDid"],
             active_credential_id=d.get("activeCredentialId"),
             delegated_from_persona_id=d.get("delegatedFromPersonaId"),
             delegated_scopes=d.get("delegatedScopes"),
