@@ -63,9 +63,17 @@ Three parties, three different jobs:
 
 | Role | Does | Never does |
 |---|---|---|
-| **Platform Operator** | Runs the issuer, onboards agents, issues Agent-Authority VCs, revokes | Hold agent private keys |
-| **AI Agent** | Holds its wallet, signs presentations locally, presents to services | Send private keys anywhere |
+| **Platform Operator** | Runs the issuer, onboards agents, holds their keys in custody, issues Agent-Authority VCs, signs presentations on an agent's behalf, revokes | Issue a Service Provider's consent grant |
+| **AI Agent** | Asks the API for a presentation, presents it to services, delegates authority to sub-agents | Hold a private key, or sign anything itself |
 | **Service Provider** | Verifies presentations, asks the user for consent, issues Delegated Grant VCs, enforces scope | Trust an agent's self-assertion |
+
+> **On key custody.** Agents used to hold their own keys and sign locally. That
+> was retired: the server now generates an agent's keypair at onboarding and
+> holds the private key encrypted at rest, so signing a presentation is an API
+> call rather than a local operation. This is a deliberate trade — it removes
+> key distribution and rotation from every agent process, at the cost of the
+> stronger property that only the agent could ever sign for itself. Operators
+> should treat the API's admin credential accordingly.
 
 Each role's full walkthrough — including what to run and what to check — is in
 the docs: **[The Trust Stack](https://docs.helixid.dev/concepts/trust-stack)** and
@@ -305,8 +313,9 @@ docker compose up --build
 
 This starts the real issuer API with SQLite and local `did:key` identities,
 HelixID Console, a protected MCP server, the LLM agent, and the web chat. A
-one-shot setup service enrolls one agent, issues its credential, saves its
-encrypted wallet to the shared volume, and exits.
+one-shot setup service onboards one agent, issues its credential, records the
+agent's DID to the shared volume, and exits. No wallet file and no key material
+is written anywhere — the server holds the agent's key.
 
 The Console/HelixID SQLite database is the source of truth for real agent trust
 state: enrollment, issued credentials, scopes, revocation, status lists, and
@@ -345,7 +354,7 @@ and successful `VP_VERIFIED` event.
 
 Open **Use case 2 — Read-only agent**. Generate an onboard token in Console,
 then click **Onboard new agent** in the Travel Concierge chat and paste the
-token. The agent service consumes the token, creates a local encrypted wallet,
+token. The agent service consumes the token, onboards the agent through the API,
 adds only local persona metadata to the Travel Concierge manifest, and the new
 agent appears in the persona selector — no restart. Select it and search
 (succeeds, it has `read:catalog`), then try to book (refused — it lacks
@@ -353,12 +362,11 @@ agent appears in the persona selector — no restart. Select it and search
 the real credential, scopes, revocation state, and audit trail.
 
 Select **Concierge Agent**, open **Use case 3 — Revoked credential**, and click
-**Revoke selected agent**. The agent service loads the selected persona's
-wallet server-side, reads the credential id, and calls
-`POST /v1/vcs/:vcId/revoke` with the demo admin key. The browser never sees the
-wallet, VC, VP, private key, or admin key. Retry the same booking: the wallet
-still signs a VP, but HelixID rejects it because the live status list now marks
-the credential revoked. Reset with `docker compose down -v` to issue a fresh
+**Revoke selected agent**. The agent service looks up the selected persona's
+active credential through the API and calls `POST /v1/vcs/:vcId/revoke` with the
+demo admin key. The browser never sees the VC, VP, or admin key. Retry the same
+booking: the API still signs a VP for that agent, but HelixID rejects it because
+the live status list now marks the credential revoked. Reset with `docker compose down -v` to issue a fresh
 Concierge credential.
 
 Open **Use case 4 — Delegated agent**. Create the demo Planner Agent
