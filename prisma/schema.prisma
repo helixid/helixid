@@ -93,6 +93,27 @@ model VpId {
   @@map("vp_ids")
 }
 
+/// Server-held agent private keys. Agent self-custody is retired: the server
+/// generates the keypair at onboarding and stores the private key encrypted
+/// here, so this table is what makes POST /v1/onboard and the custodial
+/// signing routes work at all.
+///
+/// Mirrors @helixid/core's own AgentKey model — core owns the services that
+/// read and write it (AgentKeyRepository / AesGcmKeyCustody), and this schema
+/// has to declare the same table for the Postgres adapter, which builds its
+/// schema from these migrations rather than from core's.
+model AgentKey {
+  id                  String   @id @default(cuid())
+  did                 String   @unique
+  encryptedPrivateKey String
+  iv                  String
+  authTag             String
+  algorithm           String
+  createdAt           DateTime @default(now())
+
+  @@map("agent_keys")
+}
+
 model EnrollmentToken {
   id               String      @id @default(cuid())
   tokenHash        String      @unique
