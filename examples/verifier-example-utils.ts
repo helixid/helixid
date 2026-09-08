@@ -1,28 +1,24 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { AgentWallet, HelixClient, VPBuilder } from '@helixid/sdk-js';
+import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC, SignedVP } from '@helixid/sdk-js';
 
 // Utility helpers for verifier examples
 //
 // Purpose
 // - This module provides a small convenience helper `createFreshSignedVP()` used by
-//   the examples. It requests an enrollment token from the API, then onboards a
-//   temporary wallet via the two-step challenge/response flow
-//   (`HelixClient.requestOnboardingChallenge()` + `completeOnboarding()`), and
-//   constructs/signs a fresh VP using `VPBuilder`.
+//   the examples. It requests an enrollment token from the API, onboards an agent
+//   with `HelixClient.onboardAgent()`, and asks the API to sign a fresh VP on that
+//   agent's behalf with `HelixClient.signVP()`.
 //
-// Why the two-step flow and not `HelixClient.enroll()`
-// - `enroll()` hits the API's single-roundtrip `POST /v1/enroll` ("bootstrap-proof")
-//   path, which -- live-verified (2026-09-01) -- issues the agent's VC before its
-//   DID has been registered, so it fails on a Postgres foreign-key violation
-//   (`vcs_subjectDid_fkey`) for every brand-new agent. That's a real gap in
-//   helix-api's enroll endpoint, tracked separately; this helper works around it
-//   at the example layer by using the same two-step onboarding flow the
-//   (proven-working, live-verified) helix-sdk-py examples already use
-//   (request_onboarding_challenge() + complete_onboarding()), which registers the
-//   DID as part of onboarding.
+// Why there is no wallet here any more
+// - Agent self-custody has been retired. `onboardAgent()` returns only
+//   `{ agentDid, vcId }` -- the server generates and holds the agent's private key
+//   itself, so there is no local keypair, no wallet file and no passphrase to
+//   manage. That also means the VP cannot be signed locally with `VPBuilder`: the
+//   caller never has the key, so signing is an API call (`signVP()`).
+// - This replaces both the old `enroll()` path and the two-step
+//   challenge/response onboarding that briefly superseded it; all three of
+//   `enroll()`, `requestOnboardingChallenge()` and `completeOnboarding()` were
+//   removed from the SDK in the same sweep.
 //
 // Notes and caveats
 // - Designed for examples and local testing only. In production, enrollment token
@@ -30,8 +26,10 @@ import type { SignedVC, SignedVP } from '@helixid/sdk-js';
 //   (admin API key). This helper posts to `/v1/enrollment-tokens` and therefore
 //   assumes a permissive dev environment or test harness.
 // - Environment: expects `helixApiUrl` to point at a running Helix API instance.
-// - The helper creates ephemeral files under the OS temp directory; these are
-//   not intended for persistent use.
+// - `signVP()` is admin-key gated in OSS/core (`POST /v1/agents/:did/vp`), so this
+//   helper needs an admin key -- passed as `adminApiKey` or via
+//   `HELIX_ADMIN_API_KEY`. That is a deliberate scoping reduction versus
+//   self-custody, where only the agent's own key could sign for itself.
 
 export type FreshVerifierVPOptions = {
   helixApiUrl: string;
@@ -39,6 +37,8 @@ export type FreshVerifierVPOptions = {
   requiredScope?: string;
   userDid?: string;
   agentName?: string;
+  /** Admin key for the admin-gated signing route; falls back to HELIX_ADMIN_API_KEY. */
+  adminApiKey?: string;
 };
 
 type EnrollmentTokenResponse = {
@@ -97,29 +97,31 @@ export async function createFreshSignedVP(
     requestedScopes,
   });
 
-  const walletDir = await mkdtemp(join(tmpdir(), 'helix-verifier-example-'));
-  const walletPath = join(walletDir, 'agent-wallet.enc');
-  const walletPassphrase = 'verifier-example-passphrase';
-  const client = new HelixClient(options.helixApiUrl);
+  const adminApiKey = options.adminApiKey ?? process.env.HELIX_ADMIN_API_KEY;
+  if (!adminApiKey) {
+    throw new Error(
+      'createFreshSignedVP() needs an admin key to sign a VP for a server-custody ' +
+        'agent: pass adminApiKey or set HELIX_ADMIN_API_KEY.',
+    );
+  }
+  const client = new HelixClient(options.helixApiUrl, { adminApiKey });
 
-  const challenge = await client.requestOnboardingChallenge(token.token, [
+  const { agentDid, vcId } = await client.onboardAgent(token.token, [
     'https://verifier.example.com',
   ]);
-  await client.completeOnboarding(challenge.challengeId, challenge.nonce, walletPassphrase, walletPath);
-  const wallet = await AgentWallet.load(walletPath, walletPassphrase, client);
 
-  const vc = wallet.credentials[0];
+  // Read the VC back for callers that want to inspect it. The server already
+  // holds it -- this is a read, not a local credential store.
+  const vcResponse = await client.getVC(vcId);
+  const vc = vcResponse.vc as SignedVC | undefined;
   if (!vc) {
-    throw new Error('Onboarding succeeded but wallet has no credential');
+    throw new Error(`Onboarding succeeded but VC ${vcId} could not be read back`);
   }
 
-  const agentDid = wallet.getDID();
-  const signedVP = await new VPBuilder({
-    credentials: [vc],
-    holderDid: agentDid,
-    userDid,
-    targetService: options.targetService,
-  }).sign(wallet.getPrivateKeyHex(), `${agentDid}#key-1`);
+  // Signed by the API on the agent's behalf -- the caller never has the key.
+  // Pinning vcId keeps this unambiguous once an agent holds more than one
+  // active credential.
+  const signedVP = await client.signVP(agentDid, options.targetService, { userDid, vcId });
 
   return {
     signedVP,
