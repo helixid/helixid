@@ -55,7 +55,6 @@ class Env:
     admin_api_key: str
     wallets_dir: str
     persona_manifest_path: str
-    wallet_passphrase: str
     mcp_server_url: str
     mcp_port: int
     agent_port: int
@@ -67,8 +66,10 @@ class Env:
         return _required("LLM_API_KEY")
 
 
-def wallet_path_for(persona_id: str) -> str:
-    return os.path.join(env.wallets_dir, f"{persona_id}.enc")
+def agent_identity_path(persona_id: str) -> str:
+    """Where a persona's onboarding result is recorded. Server custody: no
+    wallet file, no passphrase, no local key material."""
+    return os.path.join(env.wallets_dir, f"{persona_id}.agent.json")
 
 
 def _load_env() -> Env:
@@ -78,7 +79,6 @@ def _load_env() -> Env:
         admin_api_key=os.environ.get("HELIX_ADMIN_API_KEY", "dev-admin-key-change-in-production"),
         wallets_dir=wallets_dir,
         persona_manifest_path=os.path.join(wallets_dir, "personas.json"),
-        wallet_passphrase=os.environ.get("WALLET_PASSPHRASE", "demo-passphrase"),
         mcp_server_url=os.environ.get("MCP_SERVER_URL", "http://mcp-server:7100/mcp"),
         mcp_port=int(os.environ.get("MCP_PORT", "7100")),
         agent_port=int(os.environ.get("AGENT_PORT", "4000")),

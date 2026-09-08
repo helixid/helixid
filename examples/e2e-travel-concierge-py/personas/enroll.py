@@ -11,15 +11,13 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import List, Optional
 
 import requests
 
-from config import env, wallet_path_for
+from config import env
 from helix_sdk.client import HelixClient
-from helix_sdk.wallet import AgentWallet
 from personas.types import Persona
 
 
@@ -58,16 +56,18 @@ def _mint_token(display_name: str, scopes: List[str], max_delegation_depth: int 
 
 
 def enroll_persona(input: EnrollInput) -> EnrollResult:
-    os.makedirs(env.wallets_dir, exist_ok=True)
-    wallet_file = wallet_path_for(input.id)
     token = input.bootstrap_token or _mint_token(input.display_name, input.scopes, input.max_delegation_depth)
 
-    wallet = AgentWallet.create(wallet_file, env.wallet_passphrase)
-    client = HelixClient(env.helix_api_url)
-    vc = client.enroll(token, wallet.get_did(), wallet.get_private_key_hex())
-    wallet.add_credential(vc)
+    client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
+    identity = client.onboard_agent(token, [])
+    agent_did = identity["agentDid"]
+    vc_id = identity["vcId"]
 
-    subject = vc.get("credentialSubject") or {}
+    # Trust the credential's actual scopes (a supplied token may differ from
+    # the requested scopes). The platform holds the credential, so this reads
+    # it back rather than inspecting a locally-held copy.
+    issued = (client.get_vc(vc_id) or {}).get("vc") or {}
+    subject = issued.get("credentialSubject") or {}
     scopes = subject.get("privilegeScopes") or input.scopes
-    persona = Persona(id=input.id, display_name=input.display_name, scopes=scopes, wallet_file=wallet_file)
-    return EnrollResult(persona=persona, vc_id=vc["id"], did=wallet.get_did())
+    persona = Persona(id=input.id, display_name=input.display_name, scopes=scopes, agent_did=agent_did)
+    return EnrollResult(persona=persona, vc_id=vc_id, did=agent_did)

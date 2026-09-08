@@ -15,9 +15,14 @@ import time
 import requests
 
 from helix_sdk.client import HelixClient
-from helix_sdk.wallet import AgentWallet
 
-from helixid_config import AGENT_PRIVILEGE_SCOPES, DEMO_USER_DID, SPS, env
+from helixid_config import (
+    AGENT_PRIVILEGE_SCOPES,
+    DEMO_USER_DID,
+    SPS,
+    agent_identity_path,
+    env,
+)
 from sp_shared.identity import provision_sp_identity, state_path
 
 AGENT_ID = "travel-planner"
@@ -25,6 +30,15 @@ AGENT_ID = "travel-planner"
 
 def log(actor: str, message: str) -> None:
     print(f"[{actor}] {message}", flush=True)
+
+
+def read_identity(path: str):
+    """The agent's recorded onboarding result, or None on a first run."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
 
 
 def wait_for_api(url: str, attempts: int = 60) -> None:
@@ -75,22 +89,27 @@ def main() -> None:
 
         provisioned.append({"id": sp.id, "did": identity.did, "statusListUrl": identity.statusListUrl})
 
-    # -- 2. Travel Planner Agent enrollment -----------------------------------
+    # -- 2. Travel Planner Agent onboarding (server custody) -------------------
     wait_for_api(env.helix_api_url)
 
-    wallet_file = os.path.join(env.wallets_dir, f"{AGENT_ID}.enc")
-    wallet = AgentWallet.create(wallet_file, env.wallet_passphrase)
-    agent_did = wallet.get_did()
+    identity_file = agent_identity_path(env.wallets_dir, AGENT_ID)
+    identity = read_identity(identity_file)
 
-    if len(wallet.credentials) > 0:
-        log("Setup", f'Agent "{AGENT_ID}" already enrolled; reusing wallet.')
+    if identity is not None:
+        log("Setup", f'Agent "{AGENT_ID}" already onboarded; reusing {identity["agentDid"]}.')
     else:
         token = mint_token("Travel Planner Agent", list(AGENT_PRIVILEGE_SCOPES))
-        client = HelixClient(env.helix_api_url)
-        vc = client.enroll(token, wallet.get_did(), wallet.get_private_key_hex())
-        wallet.add_credential(vc)
-        agent_did = wallet.get_did()
-        log("Helix ID", f"Issued agent credential {vc.get('id')}.")
+        client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
+        # Two calls on purpose: minting the enrollment token is the agent
+        # owner's action, onboarding redeems it. There is no wallet,
+        # passphrase or local key any more -- the server generates and holds
+        # the agent's key.
+        identity = client.onboard_agent(token, [])
+        with open(identity_file, "w", encoding="utf-8") as handle:
+            json.dump(identity, handle, indent=2)
+        log("Helix ID", f"Onboarded agent {identity['agentDid']} (credential {identity['vcId']}).")
+
+    agent_did = identity["agentDid"]
 
     # -- 3. Summary ------------------------------------------------------------
     print("")

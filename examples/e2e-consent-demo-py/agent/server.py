@@ -1,14 +1,15 @@
 # Travel Planner Agent. Python port of agent/server.ts.
 #
-# The agent holds a wallet and calls SP tools. It has no consent logic of
+# The agent calls SP tools. It has no consent logic of
 # its own: when an SP answers "not without a grant", the agent hands the
 # user off to that SP's consent page and waits for the grant to come back.
 #
-# How the grant reaches the wallet in the browser flow:
+# How the grant becomes usable in the browser flow:
 #   1. POST /api/call     -> { status: 'consent_required', consentUrl }
 #   2. the UI opens consentUrl (the SP's own page, on the SP's own origin)
 #   3. the page posts the signed grant back via postMessage
-#   4. the UI forwards it to POST /api/grants, which stores it in the wallet
+#   4. the UI forwards it to POST /api/grants, which acknowledges it -- the
+#      platform already holds it, so there is nothing agent-side to store
 #   5. the UI retries POST /api/call, which now finds the grant and succeeds
 #
 # Tool planning is provider-neutral: Gemini, OpenAI, or Anthropic when a key
@@ -25,7 +26,6 @@ from typing import Any, Dict, List, Optional
 from flask import Flask, Response, jsonify, request
 
 from helix_sdk.client import HelixClient
-from helix_sdk.wallet import AgentWallet
 
 from agent.consent_aware_call import ConsentDeclinedError, call_sp_tool
 from agent.conversation import (
@@ -48,7 +48,7 @@ from agent.planner import (
     phrase_question,
 )
 from agent.web import agent_page_html
-from helixid_config import AIRLINE, DEMO_USER_DID, HOTEL, env, sp_did_for
+from helixid_config import AIRLINE, DEMO_USER_DID, HOTEL, agent_identity_path, env, sp_did_for
 
 SP_BY_ID = {"airline": AIRLINE, "hotel": HOTEL}
 AGENT_USERNAME = "traveler"
@@ -81,12 +81,19 @@ def _known_facts(profile: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_app() -> tuple:
-    wallet_file = os.path.join(env.wallets_dir, "travel-planner.enc")
-    # The client is attached purely so the wallet can emit CONSENT_GRANTED to
-    # helix-api when a grant lands. Audit is best-effort.
-    wallet = AgentWallet.load(
-        wallet_file, env.wallet_passphrase, HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
-    )
+    identity_file = agent_identity_path(env.wallets_dir, "travel-planner")
+    try:
+        with open(identity_file, "r", encoding="utf-8") as handle:
+            identity = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"No agent identity at {identity_file}. Run the seeder before starting the agent."
+        ) from exc
+    agent_did = identity["agentDid"]
+
+    # The admin key is what lets this process ask the API to sign on the
+    # agent's behalf. In OSS there is no per-agent credential narrower than it.
+    client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
 
     planner = (
         create_tool_planner(env.llm_provider, env.llm_api_key, env.llm_model or DEFAULT_MODELS[env.llm_provider])
@@ -94,7 +101,7 @@ def create_app() -> tuple:
         else DeterministicPlanner()
     )
     fallback_planner = DeterministicPlanner()
-    log(f"wallet loaded: {wallet.get_did()}")
+    log(f"agent identity loaded: {agent_did}")
 
     app = Flask(__name__)
     sessions: Dict[str, Dict[str, str]] = {}
@@ -113,7 +120,7 @@ def create_app() -> tuple:
         token = request.cookies.get("agent_session", "")
         session = sessions.get(token)
         if session:
-            return jsonify({"authenticated": True, **session, "agentDid": wallet.get_did(), "planner": planner_info})
+            return jsonify({"authenticated": True, **session, "agentDid": agent_did, "planner": planner_info})
         return jsonify({"authenticated": False, "planner": planner_info})
 
     @app.post("/api/login")
@@ -129,7 +136,7 @@ def create_app() -> tuple:
                 "authenticated": True,
                 "username": AGENT_USERNAME,
                 "userDid": DEMO_USER_DID,
-                "agentDid": wallet.get_did(),
+                "agentDid": agent_did,
                 "planner": planner_info,
             }
         )
@@ -163,7 +170,7 @@ def create_app() -> tuple:
 
     @app.get("/health")
     def health() -> Any:
-        return jsonify({"status": "ok", "agentDid": wallet.get_did(), "userDid": DEMO_USER_DID, "llm": planner_info})
+        return jsonify({"status": "ok", "agentDid": agent_did, "userDid": DEMO_USER_DID, "llm": planner_info})
 
     def _record_turn(token: str, history: List[Dict[str, str]], user_message: str, plan: Dict[str, Any]) -> None:
         conversation_history[token] = (
@@ -281,13 +288,31 @@ def create_app() -> tuple:
             {**plan, "planner": used_planner, "profile": current_profile, "summary": summarise_profile(current_profile)}
         )
 
+    def _held_grants_by_service() -> Dict[str, Dict[str, Any]]:
+        """Every grant the platform holds for this agent and this user,
+        keyed by the service it authorizes. One pass over the agent's active
+        credentials rather than one lookup per SP."""
+        by_service: Dict[str, Dict[str, Any]] = {}
+        for summary in client.list_vcs(subject_did=agent_did, status="active"):
+            vc = (client.get_vc(summary["vcId"]) or {}).get("vc")
+            if not vc or "DelegationGrantCredential" not in (vc.get("type") or []):
+                continue
+            subject = vc.get("credentialSubject") or {}
+            if subject.get("userDid") != DEMO_USER_DID:
+                continue
+            service_did = subject.get("serviceDid") or vc.get("issuer")
+            if service_did:
+                by_service[service_did] = subject
+        return by_service
+
     @app.get("/api/state")
     def state() -> Any:
+        held_grants = _held_grants_by_service()
         grants = []
         for sp in SP_BY_ID.values():
             service_did = sp_did_for(env.host, sp.port)
-            held = wallet.select_grant(service_did, DEMO_USER_DID)
-            subject = json.loads(held.vc_json).get("credentialSubject", {}) if held else {}
+            held = held_grants.get(service_did)
+            subject = held or {}
             grants.append(
                 {
                     "sp": sp.id,
@@ -298,7 +323,7 @@ def create_app() -> tuple:
                     "durability": subject.get("durability"),
                 }
             )
-        return jsonify({"agentDid": wallet.get_did(), "userDid": DEMO_USER_DID, "grants": grants})
+        return jsonify({"agentDid": agent_did, "userDid": DEMO_USER_DID, "grants": grants})
 
     @app.post("/api/call")
     def call() -> Any:
@@ -319,7 +344,8 @@ def create_app() -> tuple:
 
         try:
             result = call_sp_tool(
-                wallet=wallet,
+                client=client,
+                agent_did=agent_did,
                 user_did=DEMO_USER_DID,
                 sp_mcp_url=f"{base_url}/api/mcp",
                 service_did=service_did,
@@ -347,7 +373,7 @@ def create_app() -> tuple:
                     "sp": sp.id,
                     "serviceDid": service_did,
                     "consentUrl": (
-                        f"{public_base_url}/consent?agentDid={_qs(wallet.get_did())}"
+                        f"{public_base_url}/consent?agentDid={_qs(agent_did)}"
                         f"&userDid={_qs(DEMO_USER_DID)}&correlationId={_qs(correlation_id)}"
                     ),
                     "correlationId": correlation_id,
@@ -362,14 +388,13 @@ def create_app() -> tuple:
         grant_vc = body.get("grantVC")
         if not grant_vc:
             return jsonify({"error": "grantVC is required"}), 400
-        try:
-            wallet.add_credential(grant_vc)
-            log(f"stored grant {grant_vc.get('id')} from {grant_vc.get('issuer')}")
-            return jsonify({"stored": True}), 201
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": str(exc)}), 400
+        # Nothing to store: the platform recorded this grant when the SP
+        # finalized it, and /api/call reads it back from there. The route
+        # stays because the browser flow posts here.
+        log(f"grant {grant_vc.get('id')} from {grant_vc.get('issuer')} acknowledged (held by platform)")
+        return jsonify({"stored": True}), 201
 
-    return app, wallet.get_did()
+    return app, agent_did
 
 
 def _qs(value: str) -> str:

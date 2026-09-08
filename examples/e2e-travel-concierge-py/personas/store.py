@@ -1,5 +1,5 @@
 # Manifest-backed persona registry, Python port of ../personas/store.ts. The
-# manifest lives on the shared wallets volume as personas.json -- the same
+# manifest lives on the shared volume as personas.json -- the same
 # file the still-JS helixid-setup seeder writes the initial Concierge persona
 # to -- so personas enrolled at runtime (by either process) survive restarts
 # and are visible to a freshly-booted agent. Held in memory for fast reads.
