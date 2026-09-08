@@ -15,7 +15,7 @@ import {
 } from '@helixid/sdk-js';
 import { DEMO_USER_DID, SCOPES } from '../helixid-config/index.js';
 import { callSpTool } from '../agent/consentAwareCall.js';
-import { grantConsent, startHarness, type Harness } from './harness.js';
+import { grantConsent, heldGrant, startHarness, type Harness } from './harness.js';
 
 let helixClient: HelixClient;
 
@@ -32,8 +32,10 @@ beforeAll(async () => {
   h = await startHarness(AIRLINE_PORT, HOTEL_PORT);
   helixClient = new HelixClient(h.helixApiUrl);
   // Establish one grant per SP for the same (agent, user) pair.
-  await h.wallet.addCredential(await grantConsent(h.airline, h.agentDid, DEMO_USER_DID));
-  await h.wallet.addCredential(await grantConsent(h.hotel, h.agentDid, DEMO_USER_DID));
+  // Nothing to store agent-side: the platform records each grant when the
+  // issuing SP finalizes it.
+  await grantConsent(h.airline, h.agentDid, DEMO_USER_DID);
+  await grantConsent(h.hotel, h.agentDid, DEMO_USER_DID);
 }, 60_000);
 
 afterAll(async () => {
@@ -42,20 +44,19 @@ afterAll(async () => {
 
 describe('§7 Cross-SP isolation', () => {
   it('ISO1: a VP bound to the Airline is rejected by the Hotel on targetService alone', async () => {
-    const agentVC = h.wallet.credentials.find((vc) =>
-      (vc.type as string[]).includes('HelixAgentCredential'),
-    )!;
-    const airlineGrant = JSON.parse(
-      h.wallet.selectGrant(h.airline.serviceDid, DEMO_USER_DID)!.vcJson,
-    ) as SignedVC;
+    const airlineGrant = (await heldGrant(
+      h.client,
+      h.agentDid,
+      h.airline.serviceDid,
+      DEMO_USER_DID,
+    ))!;
 
-    // Bound to the Airline, but verified by the Hotel.
-    const vp = await new VPBuilder({
-      credentials: [agentVC, airlineGrant],
-      holderDid: h.agentDid,
-      targetService: h.airline.serviceDid,
+    // Bound to the Airline, but verified by the Hotel. Signed by the API on
+    // the agent's behalf — the agent has no key of its own.
+    const vp = await h.client.signVP(h.agentDid, h.airline.serviceDid, {
       userDid: DEMO_USER_DID,
-    }).sign(h.wallet.getPrivateKeyHex(), `${h.agentDid}#key-1`);
+      grantVC: airlineGrant,
+    });
 
     await expect(
       verifyVP(vp, helixClient, { expectedTargetService: h.hotel.serviceDid }),
@@ -63,20 +64,18 @@ describe('§7 Cross-SP isolation', () => {
   });
 
   it("ISO1b: the Airline's grant cannot authorize a Hotel booking even in a correctly-targeted VP", async () => {
-    const agentVC = h.wallet.credentials.find((vc) =>
-      (vc.type as string[]).includes('HelixAgentCredential'),
-    )!;
-    const airlineGrant = JSON.parse(
-      h.wallet.selectGrant(h.airline.serviceDid, DEMO_USER_DID)!.vcJson,
-    ) as SignedVC;
+    const airlineGrant = (await heldGrant(
+      h.client,
+      h.agentDid,
+      h.airline.serviceDid,
+      DEMO_USER_DID,
+    ))!;
 
     // Correctly targeted at the Hotel, but carrying the Airline's grant.
-    const vp = await new VPBuilder({
-      credentials: [agentVC, airlineGrant],
-      holderDid: h.agentDid,
-      targetService: h.hotel.serviceDid,
+    const vp = await h.client.signVP(h.agentDid, h.hotel.serviceDid, {
       userDid: DEMO_USER_DID,
-    }).sign(h.wallet.getPrivateKeyHex(), `${h.agentDid}#key-1`);
+      grantVC: airlineGrant,
+    });
 
     const res = await fetch(h.hotel.mcpUrl, {
       method: 'POST',
@@ -111,9 +110,12 @@ describe('§7 Cross-SP isolation', () => {
   });
 
   it('ISO3: revoking the Airline grant leaves the Hotel grant untouched', async () => {
-    const airlineGrant = JSON.parse(
-      h.wallet.selectGrant(h.airline.serviceDid, DEMO_USER_DID)!.vcJson,
-    ) as SignedVC;
+    const airlineGrant = (await heldGrant(
+      h.client,
+      h.agentDid,
+      h.airline.serviceDid,
+      DEMO_USER_DID,
+    ))!;
 
     // The SP's own revocation operation: flip the bit, re-sign, persist.
     const identity = h.airline;
@@ -137,7 +139,8 @@ describe('§7 Cross-SP isolation', () => {
     // "needs consent", and the SP must not invite the user to re-consent
     // around a revocation.
     const airlineResult = await callSpTool({
-      wallet: h.wallet,
+      client: h.client,
+      agentDid: h.agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: h.airline.mcpUrl,
       serviceDid: h.airline.serviceDid,
@@ -152,7 +155,8 @@ describe('§7 Cross-SP isolation', () => {
 
     // ...while the Hotel grant, on its own independent status list, still works.
     const hotelResult = await callSpTool({
-      wallet: h.wallet,
+      client: h.client,
+      agentDid: h.agentDid,
       userDid: DEMO_USER_DID,
       spMcpUrl: h.hotel.mcpUrl,
       serviceDid: h.hotel.serviceDid,
@@ -199,17 +203,19 @@ describe('§7 Cross-SP isolation', () => {
     );
   });
 
-  it('ISO5: selectGrant with one SP DID never returns the other SP grant', () => {
-    const airlineGrant = h.wallet.selectGrant(h.airline.serviceDid, DEMO_USER_DID);
-    const hotelGrant = h.wallet.selectGrant(h.hotel.serviceDid, DEMO_USER_DID);
+  it("ISO5: looking up one SP's grant never returns the other SP grant", async () => {
+    const airlineGrant = await heldGrant(h.client, h.agentDid, h.airline.serviceDid, DEMO_USER_DID);
+    const hotelGrant = await heldGrant(h.client, h.agentDid, h.hotel.serviceDid, DEMO_USER_DID);
 
     expect(airlineGrant).toBeDefined();
     expect(hotelGrant).toBeDefined();
-    expect(airlineGrant!.vcId).not.toBe(hotelGrant!.vcId);
+    expect(airlineGrant!.id).not.toBe(hotelGrant!.id);
     expect(airlineGrant!.issuer).toBe(h.airline.serviceDid);
     expect(hotelGrant!.issuer).toBe(h.hotel.serviceDid);
     // A DID neither SP owns matches nothing.
-    expect(h.wallet.selectGrant('did:web:unknown.example', DEMO_USER_DID)).toBeUndefined();
+    expect(
+      await heldGrant(h.client, h.agentDid, 'did:web:unknown.example', DEMO_USER_DID),
+    ).toBeUndefined();
   });
 
   it('ISO6: concurrent issuance at both SPs does not cross-contaminate their status lists', async () => {
@@ -249,29 +255,28 @@ describe('§5 REV8 — no cross-SP bleed at the resolver layer', () => {
   it('each verification reads only its own SP status list', async () => {
     // The Airline's list has a revoked bit (ISO3); the Hotel's does not. If any
     // caching layer keyed lists loosely, one of these two would be wrong.
-    const agentVC = h.wallet.credentials.find((vc) =>
-      (vc.type as string[]).includes('HelixAgentCredential'),
-    )!;
-    const airlineGrant = JSON.parse(
-      h.wallet.selectGrant(h.airline.serviceDid, DEMO_USER_DID)!.vcJson,
-    ) as SignedVC;
-    const hotelGrant = JSON.parse(
-      h.wallet.selectGrant(h.hotel.serviceDid, DEMO_USER_DID)!.vcJson,
-    ) as SignedVC;
+    const airlineGrant = (await heldGrant(
+      h.client,
+      h.agentDid,
+      h.airline.serviceDid,
+      DEMO_USER_DID,
+    ))!;
+    const hotelGrant = (await heldGrant(
+      h.client,
+      h.agentDid,
+      h.hotel.serviceDid,
+      DEMO_USER_DID,
+    ))!;
 
-    const airlineVP = await new VPBuilder({
-      credentials: [agentVC, airlineGrant],
-      holderDid: h.agentDid,
-      targetService: h.airline.serviceDid,
+    const airlineVP = await h.client.signVP(h.agentDid, h.airline.serviceDid, {
       userDid: DEMO_USER_DID,
-    }).sign(h.wallet.getPrivateKeyHex(), `${h.agentDid}#key-1`);
+      grantVC: airlineGrant,
+    });
 
-    const hotelVP = await new VPBuilder({
-      credentials: [agentVC, hotelGrant],
-      holderDid: h.agentDid,
-      targetService: h.hotel.serviceDid,
+    const hotelVP = await h.client.signVP(h.agentDid, h.hotel.serviceDid, {
       userDid: DEMO_USER_DID,
-    }).sign(h.wallet.getPrivateKeyHex(), `${h.agentDid}#key-1`);
+      grantVC: hotelGrant,
+    });
 
     await expect(
       verifyVP(airlineVP, helixClient, { expectedTargetService: h.airline.serviceDid }),

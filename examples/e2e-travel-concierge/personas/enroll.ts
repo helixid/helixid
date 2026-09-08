@@ -1,11 +1,11 @@
 // Shared enrollment used by both the seeder (initial Concierge) and the agent's
 // runtime onboarding route (later agents). The seeder may mint its own one-use
 // token for the default persona; runtime onboarding consumes the one-use token
-// the user generated in Console. Either way, this creates a local did:key wallet
-// and enrolls via POST /v1/enroll. Nothing here is stubbed.
-import { mkdir } from 'node:fs/promises';
-import { AgentWallet, HelixClient } from '@helixid/sdk-js';
-import { env, walletPathFor } from '../config.js';
+// the user generated in Console. Either way, this onboards via POST /v1/onboard:
+// the server generates and holds the agent's key, so nothing local is created
+// and no passphrase is involved. Nothing here is stubbed.
+import { HelixClient } from '@helixid/sdk-js';
+import { env } from '../config.js';
 import type { Persona } from './types.js';
 
 export interface EnrollInput {
@@ -42,20 +42,18 @@ async function mintToken(displayName: string, scopes: string[], maxDelegationDep
 }
 
 export async function enrollPersona(input: EnrollInput): Promise<EnrollResult> {
-  await mkdir(env.walletsDir, { recursive: true });
-  const walletFile = walletPathFor(input.id);
   const token = input.bootstrapToken ?? (await mintToken(input.displayName, input.scopes, input.maxDelegationDepth));
 
-  const wallet = await AgentWallet.create(walletFile, env.walletPassphrase);
-  const client = new HelixClient(env.helixApiUrl);
-  const vc = (await client.enroll(token, wallet)) as {
-    id: string;
-    credentialSubject?: { privilegeScopes?: string[] };
-  };
+  const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
+  const { agentDid, vcId } = await client.onboardAgent(token, []);
 
   // Trust the credential's actual scopes (a supplied token may differ from the
-  // requested scopes).
-  const scopes = vc.credentialSubject?.privilegeScopes ?? input.scopes;
-  const persona: Persona = { id: input.id, displayName: input.displayName, scopes, walletFile };
-  return { persona, vcId: vc.id, did: wallet.did };
+  // requested scopes). The platform holds the credential, so this reads it back
+  // rather than inspecting a locally-held copy.
+  const issued = (await client.getVC(vcId)).vc as
+    | { credentialSubject?: { privilegeScopes?: string[] } }
+    | undefined;
+  const scopes = issued?.credentialSubject?.privilegeScopes ?? input.scopes;
+  const persona: Persona = { id: input.id, displayName: input.displayName, scopes, agentDid };
+  return { persona, vcId, did: agentDid };
 }

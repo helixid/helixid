@@ -4,7 +4,7 @@ import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -30,7 +30,6 @@ describe('VC Expiry Live Integration', () => {
       agentName: 'Live Expiry Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-expiry.agent.example.com'],
-      passphrase: 'live-expiry-passphrase',
     });
 
     try {
@@ -44,12 +43,13 @@ describe('VC Expiry Live Integration', () => {
 
       // VP construction moved fully client-side (VPBuilder, over a held VC)
       // once /v1/vp/template was removed — see docs/proposal-sdk-api-only.md.
-      const signedVP = await buildAndSignVP(
-        [shortVc.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      // Pinned to the short-lived VC: the agent also holds its onboarding
+      // credential, so the default subject-only lookup would be ambiguous.
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: shortVc.vcId,
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 2_000));
       const details = await client.getVC(shortVc.vcId);

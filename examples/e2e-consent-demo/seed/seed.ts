@@ -3,7 +3,7 @@
 // Run-once migration, not a service. It:
 //   1. provisions a did:web DID for each demo SP, generating and hosting each
 //      SP's initial status list in the same step (Epic 1 A5's onboarding shape);
-//   2. enrolls the Travel Planner Agent against the live HelixID API;
+//   2. onboards the Travel Planner Agent against the live HelixID API;
 //   3. prints agent DID, both SP DIDs, both status-list URLs, and Console URL.
 //
 // There is no POST /v1/services call anywhere in this path — the service
@@ -12,16 +12,31 @@
 // signature on what it issued.
 
 import 'dotenv/config';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { AgentWallet, HelixClient } from '@helixid/sdk-js';
-import { AGENT_PRIVILEGE_SCOPES, DEMO_USER_DID, SPS, env } from '../helixid-config/index.js';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { HelixClient } from '@helixid/sdk-js';
+import {
+  AGENT_PRIVILEGE_SCOPES,
+  DEMO_USER_DID,
+  SPS,
+  agentIdentityPath,
+  env,
+  type AgentIdentity,
+} from '../helixid-config/index.js';
 import { provisionSpIdentity, statePath } from '../sp-shared/identity.js';
 
 const AGENT_ID = 'travel-planner';
 
 function log(actor: 'Setup' | 'SP' | 'Helix ID' | 'Agent', message: string): void {
   console.log(`[${actor}] ${message}`);
+}
+
+/** The agent's recorded onboarding result, or null on a first run. */
+async function readIdentity(path: string): Promise<AgentIdentity | null> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as AgentIdentity;
+  } catch {
+    return null;
+  }
 }
 
 async function waitForApi(url: string, attempts = 60): Promise<void> {
@@ -88,22 +103,27 @@ async function main(): Promise<void> {
     provisioned.push({ id: sp.id, did: identity.did, statusListUrl: identity.statusListUrl });
   }
 
-  // ── 2. Travel Planner Agent enrollment (unchanged by the registry removal) ─
+  // ── 2. Travel Planner Agent onboarding (server custody) ─────────────────
   await waitForApi(env.helixApiUrl);
 
-  const walletFile = join(env.walletsDir, `${AGENT_ID}.enc`);
-  const wallet = await AgentWallet.create(walletFile, env.walletPassphrase);
-  let agentDid = wallet.did;
+  const identityFile = agentIdentityPath(env.walletsDir, AGENT_ID);
+  let identity = await readIdentity(identityFile);
 
-  if (wallet.credentials.length > 0) {
-    log('Setup', `Agent "${AGENT_ID}" already enrolled; reusing wallet.`);
+  if (identity) {
+    log('Setup', `Agent "${AGENT_ID}" already onboarded; reusing ${identity.agentDid}.`);
   } else {
     const token = await mintToken('Travel Planner Agent', [...AGENT_PRIVILEGE_SCOPES]);
-    const client = new HelixClient(env.helixApiUrl);
-    const vc = (await client.enroll(token, wallet)) as { id: string };
-    agentDid = wallet.did;
-    log('Helix ID', `Issued agent credential ${vc.id}.`);
+    const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
+    // Two calls on purpose: minting the enrollment token is the agent owner's
+    // action, onboarding redeems it. Console does both in one step; a script
+    // does them back to back. There is no wallet, passphrase or local key any
+    // more — the server generates and holds the agent's key.
+    identity = await client.onboardAgent(token, []);
+    await writeFile(identityFile, JSON.stringify(identity, null, 2), 'utf8');
+    log('Helix ID', `Onboarded agent ${identity.agentDid} (credential ${identity.vcId}).`);
   }
+
+  const agentDid = identity.agentDid;
 
   // ── 3. Summary ──────────────────────────────────────────────────────────
   console.log('');

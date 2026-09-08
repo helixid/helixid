@@ -1,37 +1,40 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { config as loadEnv } from 'dotenv';
 
 import {
-  AgentWallet,
   HelixClient,
   MaxDelegationDepthExceededError,
   ScopeEscalationDeniedError,
-  delegate,
-  type SignedVC,
 } from '@helixid/sdk-js';
 
-// Delegation demo, rewritten against the SDK-API-only architecture
-// (docs/proposal-sdk-api-only.md, docs/proposal-retire-core-package.md).
+// Delegation demo, rewritten for server custody.
 //
-// This intentionally no longer mirrors the pre-retirement version of this
-// file, which built delegation VCs entirely offline via the now-retired
-// @helixid/core buildDelegationVC(). Delegation-VC construction — including
-// the scope-subset and max-depth checks — moved server-side: the SDK's
-// delegate() only produces the local signature via the API's prepare/finalize
-// endpoints (see helix-sdk-py's equivalent examples/agent_delegation_demo.py,
-// which this follows). Requires a running helix-api instance:
+// Agent self-custody has been retired, so there is no local keypair, wallet
+// file or passphrase anywhere in this demo. Both onboarding and delegation are
+// API calls: onboardAgent() has the server generate and hold the agent's key,
+// and delegateAuthority() authorizes HelixID to sign the delegation on the
+// delegator's behalf. The SDK's wallet-based delegate() needed the delegator's
+// own private key and so has had nothing legitimate to call since that sweep.
+//
+// Delegation-VC construction -- including the scope-subset and max-depth
+// checks -- is server-side, as is the lookup of which credential to delegate
+// from. Requires a running helix-api instance:
 //
 //   HELIX_API_URL=http://127.0.0.1:3579 \
 //   HELIX_ADMIN_API_KEY=your-admin-key \
 //   pnpm exec tsx examples/delegation-demo.ts
+//
+// The admin key is required: in OSS/core both signing routes
+// (/v1/agents/:did/vp and /v1/agents/:did/delegate) are admin-key gated,
+// because there is no per-tenant credential narrower than it. Minting the
+// enrollment token is not gated.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: join(__dirname, '..', '.env') });
 
 const helixApiUrl = process.env.HELIX_API_URL ?? process.env.API_BASE_URL ?? 'http://localhost:3000';
+const adminApiKey = process.env.HELIX_ADMIN_API_KEY;
 
 async function createEnrollmentToken(input: {
   agentName: string;
@@ -62,53 +65,64 @@ async function onboardAgent(
   agentName: string,
   scopes: string[],
   maxDelegationDepth: number,
-): Promise<{ wallet: AgentWallet; vc: SignedVC }> {
-  // Two-step challenge/response onboarding, not client.enroll() -- live-verified
-  // (2026-09-01) that the single-roundtrip /v1/enroll path issues the agent's VC
-  // before its DID is registered and fails on a foreign-key violation for any
-  // brand-new agent. See the equivalent note in verifier-example-utils.ts.
+): Promise<{ agentDid: string; vcId: string }> {
+  // Two API calls, deliberately: minting the enrollment token is an
+  // agent-owner action (and is not exposed as an SDK method), while
+  // onboardAgent() is the agent-side call that redeems it. Calling them
+  // back to back here is the scripted equivalent of doing both in Console.
   const token = await createEnrollmentToken({ agentName, requestedScopes: scopes, maxDelegationDepth });
-  const walletDir = await mkdtemp(join(tmpdir(), 'helix-delegation-demo-'));
-  const walletPath = join(walletDir, 'wallet.enc');
-  const passphrase = 'delegation-demo-passphrase';
-  const challenge = await client.requestOnboardingChallenge(token, ['https://api.example.invalid']);
-  await client.completeOnboarding(challenge.challengeId, challenge.nonce, passphrase, walletPath);
-  const wallet = await AgentWallet.load(walletPath, passphrase, client);
-  const vc = wallet.credentials[0];
-  if (!vc) throw new Error('Onboarding succeeded but wallet has no credential');
-  return { wallet, vc };
+  return client.onboardAgent(token, ['https://api.example.invalid']);
 }
 
 async function main(): Promise<void> {
   console.log('=== HelixID Delegation Demo (helix-sdk-js) ===');
   console.log(`API: ${helixApiUrl}\n`);
 
-  const client = new HelixClient(helixApiUrl);
+  if (!adminApiKey) {
+    throw new Error(
+      'HELIX_ADMIN_API_KEY is required: delegateAuthority() hits the admin-key ' +
+        'gated /v1/agents/:did/delegate route.',
+    );
+  }
+  const client = new HelixClient(helixApiUrl, { adminApiKey });
 
   console.log('[Step 1] Onboard delegator agent (maxDelegationDepth=1, scopes: read:orders, write:orders)');
   const delegator = await onboardAgent(client, 'Delegator Agent', ['read:orders', 'write:orders'], 1);
-  console.log(`  delegator DID: ${delegator.wallet.did}`);
-  console.log(`  delegator VC id: ${delegator.vc.id}\n`);
+  console.log(`  delegator DID: ${delegator.agentDid}`);
+  console.log(`  delegator VC id: ${delegator.vcId}\n`);
 
   console.log('[Step 2] Onboard sub-agent (no delegation authority of its own)');
   const subAgent = await onboardAgent(client, 'Sub-Agent', [], 0);
-  console.log(`  sub-agent DID: ${subAgent.wallet.did}\n`);
+  console.log(`  sub-agent DID: ${subAgent.agentDid}\n`);
 
-  console.log("[Step 3] Delegator delegates 'read:orders' to sub-agent via delegate()");
-  console.log('  (prepare/finalize: server builds the payload, only the signature is local)');
-  const delegatedVC = await delegate(
-    { to: subAgent.wallet.did, scopes: ['read:orders'], expiresIn: 3600, fromVC: delegator.vc },
-    delegator.wallet,
+  console.log("[Step 3] Delegator delegates 'read:orders' to sub-agent via delegateAuthority()");
+  console.log('  (the server holds the delegator key and signs -- nothing is signed locally)');
+  const delegatedVC = await client.delegateAuthority(
+    delegator.agentDid,
+    subAgent.agentDid,
+    ['read:orders'],
+    3600,
+    { vcId: delegator.vcId },
   );
+  // credentialSubject is a union across subject types (agent, user, ...);
+  // a delegated VC is always the agent shape, so narrow it for logging.
+  const delegatedSubject = delegatedVC.credentialSubject as {
+    privilegeScopes?: string[];
+    delegationDepth?: number;
+  };
   console.log(`  sub-agent VC id: ${delegatedVC.id}`);
-  console.log(`  delegated scopes: ${delegatedVC.credentialSubject.privilegeScopes?.join(', ')}`);
-  console.log(`  delegationDepth: ${delegatedVC.credentialSubject.delegationDepth}\n`);
+  console.log(`  delegated scopes: ${delegatedSubject.privilegeScopes?.join(', ')}`);
+  console.log(`  delegationDepth: ${delegatedSubject.delegationDepth}\n`);
 
   console.log('[Step 4] Sub-agent attempts to delegate further (should be blocked -- it has no delegation authority)');
   try {
-    await delegate(
-      { to: 'did:key:z6MkSomeOtherAgentPlaceholder', scopes: ['read:orders'], expiresIn: 3600, fromVC: delegatedVC },
-      subAgent.wallet,
+    // No vcId passed: the server resolves the sub-agent's own delegated
+    // credential and finds it has no delegation budget left.
+    await client.delegateAuthority(
+      subAgent.agentDid,
+      'did:key:z6MkSomeOtherAgentPlaceholder',
+      ['read:orders'],
+      3600,
     );
     console.error('  ERROR: unexpected success -- delegation should have been blocked');
     process.exitCode = 1;

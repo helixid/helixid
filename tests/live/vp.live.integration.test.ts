@@ -4,7 +4,7 @@ import { HelixClient } from '@helixid/sdk-js';
 import type { SignedVC } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  buildAndSignVP,
+  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
@@ -30,17 +30,14 @@ describe('VP Live Integration', () => {
       agentName: 'Live VP Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-vp.agent.example.com'],
-      passphrase: 'live-vp-passphrase',
     });
 
     try {
-      const vcRecord = await client.getVC(agent.vcId);
-      const signedVP = await buildAndSignVP(
-        [vcRecord.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: agent.vcId,
+      });
 
       const verifyRes = await http.post('/v1/vp/verify').send({ signedVP });
       expect(verifyRes.statusCode).toBe(200);
@@ -69,17 +66,14 @@ describe('VP Live Integration', () => {
       agentName: 'Live VP Replay Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-vp-replay.agent.example.com'],
-      passphrase: 'live-vp-replay-passphrase',
     });
 
     try {
-      const vcRecord = await client.getVC(agent.vcId);
-      const signedVP = await buildAndSignVP(
-        [vcRecord.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      const signedVP = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: agent.vcId,
+      });
 
       const firstRes = await http.post('/v1/vp/verify').send({ signedVP });
       expect(firstRes.statusCode).toBe(200);
@@ -99,17 +93,14 @@ describe('VP Live Integration', () => {
       agentName: 'Live Tamper Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-tamper.agent.example.com'],
-      passphrase: 'live-tamper-passphrase',
     });
 
     try {
-      const vcRecord = await client.getVC(agent.vcId);
-      const vpTampered = await buildAndSignVP(
-        [vcRecord.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      const vpTampered = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: agent.vcId,
+      });
       (vpTampered as unknown as { targetService: string }).targetService = 'tampered-service';
 
       const vpTamperRes = await http.post('/v1/vp/verify').send({ signedVP: vpTampered });
@@ -130,17 +121,14 @@ describe('VP Live Integration', () => {
       agentName: 'Live VC Tamper Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-vc-tamper.agent.example.com'],
-      passphrase: 'live-vc-tamper-passphrase',
     });
 
     try {
-      const vcRecord = await client.getVC(agent.vcId);
-      const vcTampered = await buildAndSignVP(
-        [vcRecord.vc as SignedVC],
-        agent.did,
-        agent.privateKeyHex,
-        { targetService: 'amazon', userDid: 'did:hedera:testnet:live-user-placeholder' },
-      );
+      const vcTampered = await signVPForAgent(client, agent.did, {
+        targetService: 'amazon',
+        userDid: 'did:hedera:testnet:live-user-placeholder',
+        vcId: agent.vcId,
+      });
       (vcTampered.verifiableCredential[0] as any).credentialSubject.agentName = 'Tampered Agent';
 
       const vcTamperRes = await http.post('/v1/vp/verify').send({ signedVP: vcTampered });

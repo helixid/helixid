@@ -1,7 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
-import { AgentWallet, HelixClient } from '@helixid/sdk-js';
+import { HelixClient } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
   onboardLiveAgent,
@@ -22,14 +21,13 @@ describe('Onboarding Live Integration', () => {
     await api?.stop();
   });
 
-  it('onboards an agent through the SDK and persists DID, VC, wallet, and audit state', async () => {
+  it('onboards an agent through the SDK and persists DID, VC, and audit state', async () => {
     const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
     const http = supertest(api.baseUrl);
     const agent = await onboardLiveAgent(api, client, {
       agentName: 'Live Onboarding Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-onboarding.agent.example.com'],
-      passphrase: 'live-onboarding-passphrase',
     });
 
     try {
@@ -59,13 +57,16 @@ describe('Onboarding Live Integration', () => {
         `${api.issuerDid}#key-1`,
       );
 
-      const rawWallet = await readFile(agent.walletPath, 'utf8');
-      expect(rawWallet).toContain('encryptedPrivateKey');
-      expect(rawWallet).not.toContain(agent.privateKeyHex);
+      // Server custody: onboarding returns a DID and a VC id and nothing
+      // else. There is no wallet file, and no key material crosses the API
+      // boundary at all — the whole response is those two identifiers.
+      expect(Object.keys(agent).sort()).toEqual(['cleanup', 'did', 'vcId']);
+      expect(JSON.stringify(vcRecord)).not.toContain('privateKey');
 
-      const wallet = await new AgentWallet().load('live-onboarding-passphrase', agent.walletPath);
-      expect(wallet.did).toBe(agent.did);
-      expect(wallet.credentials.map((credential) => credential.vcId)).toContain(agent.vcId);
+      // The credential is findable for this subject, which is what the agent
+      // used to prove by holding it in a wallet.
+      const listed = await client.listVCs({ subjectDid: agent.did, status: 'active' });
+      expect(listed.map((entry) => entry.vcId)).toContain(agent.vcId);
 
       const auditLog = await client.getAuditLog({ limit: 100 });
       const auditTypes = auditLog.map((entry) => entry.eventType);

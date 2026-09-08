@@ -1,33 +1,31 @@
 import 'dotenv/config';
-import { attachHelixVP, helixidMCPMiddleware } from '../../packages/mcp/src/index.js';
+import { attachHelixVP, helixidMCPMiddleware } from '@helixid/mcp-middleware';
 import type { SignedVP } from '@helixid/sdk-js';
 import {
   createHelixClient,
   extractScopes,
-  loadWalletSummary,
   logStep,
+  requireAgentIdentity,
   targetService,
   userDid,
   verifyWithScopes,
-  walletPassphrase,
-  walletPath,
 } from './shared.js';
 
 async function main(): Promise<void> {
   const client = createHelixClient();
-  const { wallet, credential } = await loadWalletSummary();
+  const { agentDid } = await requireAgentIdentity();
 
   const realVerifier = {
     verifySessionToken: client.verifySessionToken.bind(client),
   };
 
-  logStep('MCP', `Loaded wallet for ${wallet.did}.`);
+  logStep('MCP', `Acting as ${agentDid}.`);
   logStep('MCP', `Attaching a real HelixVP to tool input for ${targetService}.`);
   const outboundCall = await attachHelixVP(
     { name: 'orders.lookup', input: { orderId: 'ORD-1001' } },
     {
-      walletPassphrase,
-      walletFilePath: walletPath,
+      client,
+      agentDid,
       userDid,
       targetService,
     },
@@ -38,7 +36,9 @@ async function main(): Promise<void> {
     `_helixVP attached to tool input (vpId: ${(outboundCall.input?._helixVP as { id?: string })?.id ?? 'unknown'})`,
   );
 
+  // Verification is API-mediated too, so the middleware needs the client.
   const requireReadOrders = helixidMCPMiddleware({
+    client,
     requiredScopes: ['read:orders'],
     allowSelfSigned: false,
   });
@@ -50,13 +50,13 @@ async function main(): Promise<void> {
   const deniedCall = await attachHelixVP(
     { name: 'inventory.admin', input: { sku: 'SKU-1001' } },
     {
-      walletPassphrase,
-      walletFilePath: walletPath,
+      client,
+      agentDid,
       userDid,
       targetService,
     },
   );
-  const requireWriteInventory = helixidMCPMiddleware({ requiredScopes: ['write:inventory'] });
+  const requireWriteInventory = helixidMCPMiddleware({ client, requiredScopes: ['write:inventory'] });
   try {
     await requireWriteInventory(deniedCall as any);
     logStep('MCP', 'Denied request: unexpectedly allowed');
