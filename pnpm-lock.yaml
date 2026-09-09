@@ -22,8 +22,8 @@ importers:
         specifier: ^5.2.6
         version: 5.2.6
       '@helixid/core':
-        specifier: ^1.0.0
-        version: 1.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
+        specifier: ^2.0.0
+        version: 2.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
       '@prisma/adapter-pg':
         specifier: ^7.8.0
         version: 7.10.0
@@ -674,8 +674,8 @@ packages:
   '@helixid/core@0.1.5':
     resolution: {integrity: sha512-mdqBzfe1katc0BbcWU0jKTWkSWxvizryknFQiiPEnSYI+xsbCa5SLLIAH0CUgdIH0C1EITnqCpzE1KfX/mcLvQ==}
 
-  '@helixid/core@1.0.0':
-    resolution: {integrity: sha512-Szlk7ZEcJwbFa+EK3kZ0g3T+3kjfLlV2yqXUKCl5QeKSRGYWpz/hMmdly70OpwHqGw7ukeIOLCX+qZtGQLutOQ==}
+  '@helixid/core@2.0.0':
+    resolution: {integrity: sha512-jGpatYSK0MPJ60CAh39F1L4l/HNnIC4hXnXqTMVhYNUE3VG3fwbqzvJcSg/8VWypjGmY3FgsZFCCp3BKL6ORhQ==}
     engines: {node: ^20.19.0 || >=22.12.0, pnpm: '>=9.0.0'}
 
   '@helixid/did-hedera@0.1.2':
@@ -4465,7 +4465,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       zod: 3.25.76
 
-  '@helixid/core@1.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)':
+  '@helixid/core@2.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
       '@fastify/sensible': 6.0.5
       '@fastify/swagger': 9.8.1
