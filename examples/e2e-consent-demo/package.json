@@ -18,7 +18,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
     "@google/genai": "^2.15.0",
-    "@helixid/sdk-js": "^0.2.0",
+    "@helixid/sdk-js": "^0.4.0",
     "@helixid/widget": "^0.1.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",

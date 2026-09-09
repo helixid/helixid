@@ -22,8 +22,8 @@ importers:
         specifier: ^5.2.6
         version: 5.2.6
       '@helixid/core':
-        specifier: ^2.0.0
-        version: 2.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.3.0)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
+        specifier: ^2.0.1
+        version: 2.0.1(magicast@0.5.4)(prisma@7.10.0(@types/react@19.3.0)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
       '@prisma/adapter-pg':
         specifier: ^7.10.0
         version: 7.10.0
@@ -50,8 +50,8 @@ importers:
         specifier: ^0.1.2
         version: 0.1.2(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.3.0)(react@19.2.8))
       '@helixid/sdk-js':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@types/node':
         specifier: ^20.19.43
         version: 20.19.43
@@ -95,8 +95,8 @@ importers:
   e2e:
     devDependencies:
       '@helixid/sdk-js':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
@@ -110,8 +110,8 @@ importers:
   examples:
     dependencies:
       '@helixid/sdk-js':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
 
   examples/e2e-consent-demo:
     dependencies:
@@ -122,8 +122,8 @@ importers:
         specifier: ^2.15.0
         version: 2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))
       '@helixid/sdk-js':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@helixid/widget':
         specifier: ^0.1.0
         version: 0.1.0
@@ -176,8 +176,8 @@ importers:
         specifier: npm:@helixid/mcp-middleware@^0.1.4
         version: '@helixid/mcp-middleware@0.1.4(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))'
       '@helixid/sdk-js':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.30.0(zod@3.25.76)
@@ -212,14 +212,14 @@ importers:
   examples/framework-middleware:
     dependencies:
       '@helixid/langchain':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.2
+        version: 0.2.2
       '@helixid/mcp-middleware':
         specifier: ^0.1.4
         version: 0.1.4(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))
       '@helixid/sdk-js':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -674,15 +674,15 @@ packages:
   '@helixid/core@0.1.5':
     resolution: {integrity: sha512-mdqBzfe1katc0BbcWU0jKTWkSWxvizryknFQiiPEnSYI+xsbCa5SLLIAH0CUgdIH0C1EITnqCpzE1KfX/mcLvQ==}
 
-  '@helixid/core@2.0.0':
-    resolution: {integrity: sha512-jGpatYSK0MPJ60CAh39F1L4l/HNnIC4hXnXqTMVhYNUE3VG3fwbqzvJcSg/8VWypjGmY3FgsZFCCp3BKL6ORhQ==}
+  '@helixid/core@2.0.1':
+    resolution: {integrity: sha512-oGvEd0HJMttlevtRC8Pvnfb5cIqreA9tFUlTIvRE0GtPW5QHa/D/296wFkA3e8b+JxxRQHahUshZcFhMgMUO+w==}
     engines: {node: ^20.19.0 || >=22.12.0, pnpm: '>=9.0.0'}
 
   '@helixid/did-hedera@0.1.2':
     resolution: {integrity: sha512-byKtjIW60qQ5ZzoIELydknuD3qW8yUriyYVTFVbEbwuHbY4h4ntwtV5hfHokMTwhNmYFvYcqUUVgWl0Q7PKwIA==}
 
-  '@helixid/langchain@0.2.0':
-    resolution: {integrity: sha512-2crduMZ1InMucsrlYx9j671aDUMOWhehxq9q2hHyjPScIVPhA6Mzyl8Ye8tuQqO77eJnW3JGbygp7Yv5qrHeWQ==}
+  '@helixid/langchain@0.2.2':
+    resolution: {integrity: sha512-e0jSGCJpIAb/i8EScm4JIJqTpttqiOs77uyyheW9tBhexmQejoQRVVKXZmey2LNzTpfRO4uoAYieISoVgTi7oA==}
     peerDependencies:
       '@langchain/core': '*'
     peerDependenciesMeta:
@@ -699,6 +699,9 @@ packages:
 
   '@helixid/sdk-js@0.2.0':
     resolution: {integrity: sha512-vrcx/6rjOqDhuQsLp/LGXaxEHffKevDZJiRmOSLoUwDcPH4RwgSDKQeTNJoZ+Nhkcjbc4ZlAz7Kxh5vky+OJmw==}
+
+  '@helixid/sdk-js@0.4.0':
+    resolution: {integrity: sha512-f+GFcghhhJPXXvte/gUFaBgslk7NNHQBq/u+97CA4LZhcIhNsXG7dkFa54eeAtkOwC+edi6wfq0tdJYa4EdpVQ==}
 
   '@helixid/widget@0.1.0':
     resolution: {integrity: sha512-7M7QP19pwmDlvk5sfcw5i+GrhbooCFlGA8J4D78sje90Yd2c4lgF2k4cGFxrjq0j0TP1RabPQ1BVmA3GbfmXQw==}
@@ -4402,7 +4405,7 @@ snapshots:
   '@grpc/proto-loader@0.7.15':
     dependencies:
       lodash.camelcase: 4.3.0
-      long: 5.3.1
+      long: 5.3.2
       protobufjs: 8.0.2
       yargs: 17.7.3
 
@@ -4472,7 +4475,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       zod: 3.25.76
 
-  '@helixid/core@2.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.3.0)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)':
+  '@helixid/core@2.0.1(magicast@0.5.4)(prisma@7.10.0(@types/react@19.3.0)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
       '@fastify/sensible': 6.0.5
       '@fastify/swagger': 9.8.1
@@ -4510,9 +4513,9 @@ snapshots:
       - react-native
       - supports-color
 
-  '@helixid/langchain@0.2.0':
+  '@helixid/langchain@0.2.2':
     dependencies:
-      '@helixid/sdk-js': 0.2.0
+      '@helixid/sdk-js': 0.4.0
 
   '@helixid/mcp-middleware@0.1.4(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))':
     dependencies:
@@ -4521,6 +4524,12 @@ snapshots:
       '@modelcontextprotocol/sdk': 1.30.0(zod@3.25.76)
 
   '@helixid/sdk-js@0.2.0':
+    dependencies:
+      '@noble/ed25519': 2.3.0
+      '@noble/hashes': 1.8.0
+      zod: 3.25.76
+
+  '@helixid/sdk-js@0.4.0':
     dependencies:
       '@noble/ed25519': 2.3.0
       '@noble/hashes': 1.8.0
