@@ -1,0 +1,16 @@
+{
+  "name": "@helixid/example-e2e-screenshots",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright browser-driven walkthroughs of the consent and travel-concierge demos, screenshotting every step. Points at a demo's already-running docker compose stack; does not start or stop it.",
+  "scripts": {
+    "consent": "tsx consent-flow.ts",
+    "concierge": "tsx concierge-flow.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}
