@@ -73,12 +73,11 @@ this example's `docker/console-nginx.conf`, which serves the Console SPA and
 reverse-proxies `/v1` and `/health` to `helix-api` so the browser talks to the
 API **same-origin** — the demo API ships without CORS.
 
-Two things come from public sources during the image build, with nothing
+Two things come from the registries during the image build, with nothing
 vendored from a sibling directory:
 
-- `helixid-sdk-py` — `pip install "helixid-sdk-py[dev] @ git+https://github.com/helixid/helix-sdk-py"`.
+- `helixid-sdk-py` — `pip install "helixid-sdk-py[dev]"` from PyPI.
 - `@helixid/widget` — the consent widget has no Python port, so a first build
-  stage installs it from the public `helixid/helix-sdk-js` repo and copies the
-  resulting browser bundle in. `sp_shared/serve.py` serves it from
-  `widget-dist/` by default; set `WIDGET_DIST_PATH` to point somewhere else
-  when running outside Docker.
+  stage installs it from npm and copies the resulting pre-built browser
+  bundle in. `sp_shared/serve.py` serves it from `widget-dist/` by default;
+  set `WIDGET_DIST_PATH` to point somewhere else when running outside Docker.

@@ -74,9 +74,9 @@ this example's `docker/console-nginx.conf`, which serves the Console SPA and
 reverse-proxies `/v1` and `/health` to `helix-api` so the browser talks to the
 API **same-origin** — the demo API ships without CORS.
 
-`helixid-sdk-py` is installed straight from its public repo during the image
-build (`pip install "helixid-sdk-py[mcp-middleware] @ git+https://github.com/helixid/helix-sdk-py"`).
-Nothing is vendored from a sibling directory.
+`helixid-sdk-py` is installed from PyPI during the image build
+(`pip install "helixid-sdk-py[mcp-middleware]"`). Nothing is vendored from a
+sibling directory.
 
 ## Prerequisites
 

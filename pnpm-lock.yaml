@@ -7,8 +7,6 @@ settings:
 overrides:
   fast-uri: 3.1.2
   protobufjs: 8.0.2
-  '@helixid/mcp-middleware>@helixid/sdk-js': github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-  '@helixid/langchain>@helixid/sdk-js': github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
 
 importers:
 
@@ -24,8 +22,8 @@ importers:
         specifier: ^5.2.6
         version: 5.2.6
       '@helixid/core':
-        specifier: github:helixid/helix-core#988ec50145ebcee678ef2197797b457f5c977c47
-        version: https://codeload.github.com/helixid/helix-core/tar.gz/988ec50145ebcee678ef2197797b457f5c977c47(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
+        specifier: ^1.0.0
+        version: 1.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)
       '@prisma/adapter-pg':
         specifier: ^7.8.0
         version: 7.10.0
@@ -49,11 +47,11 @@ importers:
         version: 8.23.0
     devDependencies:
       '@helixid/did-hedera':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:did-hedera
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:did-hedera(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
+        specifier: ^0.1.2
+        version: 0.1.2(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+        specifier: ^0.2.0
+        version: 0.2.0
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
@@ -97,8 +95,8 @@ importers:
   e2e:
     devDependencies:
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+        specifier: ^0.2.0
+        version: 0.2.0
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
@@ -112,8 +110,8 @@ importers:
   examples:
     dependencies:
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+        specifier: ^0.2.0
+        version: 0.2.0
 
   examples/e2e-consent-demo:
     dependencies:
@@ -124,11 +122,11 @@ importers:
         specifier: ^2.15.0
         version: 2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+        specifier: ^0.2.0
+        version: 0.2.0
       '@helixid/widget':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:widget
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:widget
+        specifier: ^0.1.0
+        version: 0.1.0
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -175,11 +173,11 @@ importers:
         specifier: ^0.68.0
         version: 0.68.0(zod@3.25.76)
       '@helixid/mcp':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:mcp-middleware
-        version: '@helixid/mcp-middleware@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:mcp-middleware(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))'
+        specifier: npm:@helixid/mcp-middleware@^0.1.4
+        version: '@helixid/mcp-middleware@0.1.4(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))'
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+        specifier: ^0.2.0
+        version: 0.2.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.30.0(zod@3.25.76)
@@ -214,14 +212,14 @@ importers:
   examples/framework-middleware:
     dependencies:
       '@helixid/langchain':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:langchain
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:langchain
+        specifier: ^0.2.0
+        version: 0.2.0
       '@helixid/mcp-middleware':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:mcp-middleware
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:mcp-middleware(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))
+        specifier: ^0.1.4
+        version: 0.1.4(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))
       '@helixid/sdk-js':
-        specifier: github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js
-        version: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+        specifier: ^0.2.0
+        version: 0.2.0
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -673,40 +671,37 @@ packages:
     peerDependencies:
       bn.js: 5.2.3
 
-  '@helixid/core@https://codeload.github.com/helixid/helix-core/tar.gz/988ec50145ebcee678ef2197797b457f5c977c47':
-    resolution: {tarball: https://codeload.github.com/helixid/helix-core/tar.gz/988ec50145ebcee678ef2197797b457f5c977c47}
-    version: 1.0.0
+  '@helixid/core@0.1.5':
+    resolution: {integrity: sha512-mdqBzfe1katc0BbcWU0jKTWkSWxvizryknFQiiPEnSYI+xsbCa5SLLIAH0CUgdIH0C1EITnqCpzE1KfX/mcLvQ==}
+
+  '@helixid/core@1.0.0':
+    resolution: {integrity: sha512-Szlk7ZEcJwbFa+EK3kZ0g3T+3kjfLlV2yqXUKCl5QeKSRGYWpz/hMmdly70OpwHqGw7ukeIOLCX+qZtGQLutOQ==}
     engines: {node: ^20.19.0 || >=22.12.0, pnpm: '>=9.0.0'}
 
-  '@helixid/did-hedera@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:did-hedera':
-    resolution: {path: did-hedera, tarball: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13}
-    version: 0.1.2
+  '@helixid/did-hedera@0.1.2':
+    resolution: {integrity: sha512-byKtjIW60qQ5ZzoIELydknuD3qW8yUriyYVTFVbEbwuHbY4h4ntwtV5hfHokMTwhNmYFvYcqUUVgWl0Q7PKwIA==}
 
-  '@helixid/langchain@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:langchain':
-    resolution: {path: langchain, tarball: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13}
-    version: 0.1.1
+  '@helixid/langchain@0.2.0':
+    resolution: {integrity: sha512-2crduMZ1InMucsrlYx9j671aDUMOWhehxq9q2hHyjPScIVPhA6Mzyl8Ye8tuQqO77eJnW3JGbygp7Yv5qrHeWQ==}
     peerDependencies:
       '@langchain/core': '*'
     peerDependenciesMeta:
       '@langchain/core':
         optional: true
 
-  '@helixid/mcp-middleware@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:mcp-middleware':
-    resolution: {path: mcp-middleware, tarball: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13}
-    version: 0.1.2
+  '@helixid/mcp-middleware@0.1.4':
+    resolution: {integrity: sha512-34QHGFr8sx+HIAGi2TRyT7JHpzXJLM/kgaVPtqd01mHamYW1ksFYIRTTfKiYSY5I3/rCEwbWMt0ocmWjt4DDxw==}
     peerDependencies:
       '@modelcontextprotocol/sdk': '*'
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
 
-  '@helixid/sdk-js@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js':
-    resolution: {path: helix-sdk-js, tarball: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13}
-    version: 0.1.7
+  '@helixid/sdk-js@0.2.0':
+    resolution: {integrity: sha512-vrcx/6rjOqDhuQsLp/LGXaxEHffKevDZJiRmOSLoUwDcPH4RwgSDKQeTNJoZ+Nhkcjbc4ZlAz7Kxh5vky+OJmw==}
 
-  '@helixid/widget@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:widget':
-    resolution: {path: widget, tarball: https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13}
-    version: 0.1.0
+  '@helixid/widget@0.1.0':
+    resolution: {integrity: sha512-7M7QP19pwmDlvk5sfcw5i+GrhbooCFlGA8J4D78sje90Yd2c4lgF2k4cGFxrjq0j0TP1RabPQ1BVmA3GbfmXQw==}
 
   '@hiero-did-sdk/cache@0.1.8':
     resolution: {integrity: sha512-HGC4ckyzK6ollXzwliEcyy9398srz2eSmBbYBFQawc/D3wCqK1Dd2jHhhQoutsUp8s/7+EhpB4urZ3CSOHFjBA==}
@@ -4463,7 +4458,14 @@ snapshots:
       - react-native
       - supports-color
 
-  '@helixid/core@https://codeload.github.com/helixid/helix-core/tar.gz/988ec50145ebcee678ef2197797b457f5c977c47(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)':
+  '@helixid/core@0.1.5':
+    dependencies:
+      '@noble/curves': 1.9.7
+      '@noble/ed25519': 2.3.0
+      '@noble/hashes': 1.8.0
+      zod: 3.25.76
+
+  '@helixid/core@1.0.0(magicast@0.5.4)(prisma@7.10.0(@types/react@19.2.18)(better-sqlite3@12.11.1)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
       '@fastify/sensible': 6.0.5
       '@fastify/swagger': 9.8.1
@@ -4488,38 +4490,36 @@ snapshots:
       - supports-color
       - typescript
 
-  '@helixid/did-hedera@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:did-hedera(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))':
+  '@helixid/did-hedera@0.1.2(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))':
     dependencies:
       '@hashgraph/sdk': 2.81.0(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
+      '@helixid/core': 0.1.5
       '@hiero-did-sdk/hcs': 0.1.8(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
       '@hiero-did-sdk/registrar': 0.1.8(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
       '@hiero-did-sdk/resolver': 0.1.8(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))
-      '@noble/ed25519': 2.3.0
-      '@noble/hashes': 1.8.0
-      zod: 3.25.76
     transitivePeerDependencies:
       - bn.js
       - expo-crypto
       - react-native
       - supports-color
 
-  '@helixid/langchain@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:langchain':
+  '@helixid/langchain@0.2.0':
     dependencies:
-      '@helixid/sdk-js': https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+      '@helixid/sdk-js': 0.2.0
 
-  '@helixid/mcp-middleware@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:mcp-middleware(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))':
+  '@helixid/mcp-middleware@0.1.4(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))':
     dependencies:
-      '@helixid/sdk-js': https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js
+      '@helixid/sdk-js': 0.2.0
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.30.0(zod@3.25.76)
 
-  '@helixid/sdk-js@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:helix-sdk-js':
+  '@helixid/sdk-js@0.2.0':
     dependencies:
       '@noble/ed25519': 2.3.0
       '@noble/hashes': 1.8.0
       zod: 3.25.76
 
-  '@helixid/widget@https://codeload.github.com/helixid/helix-sdk-js/tar.gz/ec237fd38d0ec047e746d905ca22167a94a1ea13#path:widget': {}
+  '@helixid/widget@0.1.0': {}
 
   '@hiero-did-sdk/cache@0.1.8(bn.js@5.2.5)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.8))':
     dependencies:

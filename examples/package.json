@@ -2,6 +2,6 @@
   "name": "@helixid/examples",
   "private": true,
   "dependencies": {
-    "@helixid/sdk-js": "github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js"
+    "@helixid/sdk-js": "^0.2.0"
   }
 }

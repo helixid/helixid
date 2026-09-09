@@ -3,31 +3,18 @@
 # overrides the command per service.
 #
 # Build context: this repo's root (see docker-compose.yml's `context: ../..`).
-# Nothing outside this repo is needed -- helixid-sdk-py comes from the public
-# helixid/helix-sdk-py repo, and the consent widget's browser bundle is built
-# in the first stage below from the public helixid/helix-sdk-js repo.
+# Nothing outside this repo is needed -- helixid-sdk-py is a published PyPI
+# package, and the consent widget's browser bundle is built in the first
+# stage below from the published @helixid/widget npm package.
 
-# ── Stage 1: build @helixid/widget's browser bundle ──────────────────────────
+# ── Stage 1: get @helixid/widget's browser bundle ────────────────────────────
 # @helixid/widget has no Python port; the SPs serve its pre-built dist as
-# static assets. Installing the package runs its own prepare/build script,
-# which is what produces dist/.
+# static assets. The npm package already ships a pre-built dist/, so this is
+# just a plain install -- no build step needed.
 FROM node:24.15.0-alpine AS widget
-RUN apk add --no-cache git
-# A container has no TTY, so a corepack download prompt would abort the build.
-ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-# This must be pnpm, and specifically pnpm 9, for two independent reasons:
-#   * `#path:` is pnpm-only syntax. npm silently ignores it and installs the
-#     helix-sdk-js workspace ROOT, which has no dist/ and builds nothing.
-#   * pnpm 10 refuses to run a git dependency's prepare script
-#     (ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED), and that prepare is what builds
-#     dist/. 9.15.2 matches the packageManager both repos pin.
-RUN corepack enable && corepack prepare pnpm@9.15.2 --activate
 WORKDIR /w
-RUN npm init -y >/dev/null
-RUN pnpm add "github:helixid/helix-sdk-js#path:widget"
-# pnpm links the package out of a content-addressed store, so dereference the
-# symlink into plain files that the COPY in the next stage can read.
-RUN mkdir -p /widget-dist && cp -rL /w/node_modules/@helixid/widget/dist/. /widget-dist/
+RUN npm init -y >/dev/null && npm install --no-save @helixid/widget@^0.1.0
+RUN mkdir -p /widget-dist && cp -r /w/node_modules/@helixid/widget/dist/. /widget-dist/
 
 # ── Stage 2: the demo itself ─────────────────────────────────────────────────
 FROM python:3.11-slim
@@ -35,16 +22,15 @@ FROM python:3.11-slim
 WORKDIR /repo
 
 # pynacl and cryptography (helix-sdk-py's crypto deps) ship manylinux wheels,
-# so gcc is only a fallback; git resolves the pip git+ spec below.
-RUN apt-get update && apt-get install -y --no-install-recommends gcc git && rm -rf /var/lib/apt/lists/*
+# so gcc is only a fallback.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
 
 # Manifests first for layer caching.
 COPY examples/e2e-consent-demo-py/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# helix-sdk-py from its public repo.
-RUN pip install --no-cache-dir \
-    "helixid-sdk-py[dev] @ git+https://github.com/helixid/helix-sdk-py"
+# helix-sdk-py from PyPI.
+RUN pip install --no-cache-dir "helixid-sdk-py[dev]>=0.1.1"
 
 # The demo itself.
 COPY examples/e2e-consent-demo-py examples/e2e-consent-demo-py

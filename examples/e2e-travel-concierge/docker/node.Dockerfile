@@ -3,16 +3,14 @@
 # so compose overrides the command per service.
 #
 # Build context: this repo's root (see docker-compose.yml's `context: ../..`).
-# Nothing outside this repo is needed -- @helixid/sdk-js and @helixid/mcp are
-# git dependencies on the public helixid/helix-sdk-js repo (@helixid/mcp is
-# this consumer's own dependency key for that repo's mcp-middleware package),
-# so a plain `pnpm install` resolves them with no sibling checkout.
+# Nothing outside this repo is needed -- @helixid/sdk-js and @helixid/mcp
+# (this consumer's own dependency key for the published @helixid/mcp-middleware
+# package) are both published npm packages, so a plain `pnpm install` resolves
+# them from the registry with no sibling checkout.
 #
 #   docker build -f examples/e2e-travel-concierge/docker/node.Dockerfile -t helixid-travel-node .
 FROM node:24.15.0-alpine
 RUN corepack enable
-# git is what resolves the github: dependency specs above.
-RUN apk add --no-cache git
 # Prefer IPv4 for package downloads (some Docker VM networks have flaky IPv6).
 ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # A container has no TTY, so a corepack download prompt would abort the process.

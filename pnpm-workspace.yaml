@@ -4,15 +4,5 @@ packages:
   - 'examples'
   - 'e2e'
 
-# @helixid/sdk-js, @helixid/did-hedera, and @helixid/widget are consumed as
-# git dependencies pinned to a specific commit of helixid/helix-sdk-js (see
-# each consuming package.json), since they aren't published to a registry
-# yet. Each needs to run its own build (via its "prepare" script) during
-# install to produce dist/ — this allowlists that. When bumping the pinned
-# commit, these keys' commit hash must be updated to match (pnpm install's
-# error message reports the exact expected key if it's out of sync).
 allowBuilds:
-  "@helixid/sdk-js@git+https://github.com/helixid/helix-sdk-js.git#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:helix-sdk-js": true
-  "@helixid/did-hedera@git+https://github.com/helixid/helix-sdk-js.git#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:did-hedera": true
-  "@helixid/widget@git+https://github.com/helixid/helix-sdk-js.git#d91e2370f6dafcf5306886c2c20b20828acb5d06&path:widget": true
   esbuild: true

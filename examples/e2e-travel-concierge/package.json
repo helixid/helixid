@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
-    "@helixid/sdk-js": "github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:helix-sdk-js",
-    "@helixid/mcp": "github:helixid/helix-sdk-js#ec237fd38d0ec047e746d905ca22167a94a1ea13&path:mcp-middleware",
+    "@helixid/sdk-js": "^0.2.0",
+    "@helixid/mcp": "npm:@helixid/mcp-middleware@^0.1.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",

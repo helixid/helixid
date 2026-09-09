@@ -32,9 +32,8 @@ its own nginx server block, which same-origin-proxies `/v1` to `helix-api`
 because the demo API ships without CORS.
 
 SDK packages resolve as ordinary dependencies during the image build:
-`@helixid/sdk-js` / `@helixid/mcp` / `@helixid/widget` as git dependencies on
-the public `helixid/helix-sdk-js` repo, and `helixid-sdk-py` from the public
-`helixid/helix-sdk-py` repo. Nothing is vendored from a sibling directory.
+`@helixid/sdk-js` / `@helixid/mcp` / `@helixid/widget` from npm, and
+`helixid-sdk-py` from PyPI. Nothing is vendored from a sibling directory.
 
 ## Where each demo listens
 
