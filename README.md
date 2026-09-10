@@ -117,12 +117,11 @@ backed by cryptographic trust that JWT can never provide.
 
 **Caching architecture:**
 - **DID documents:** cached in-process automatically — 5 minutes for `did:web`,
-  15 minutes for `did:hedera`. No configuration needed.
+  15 minutes for `did:hedera`. No configuration needed for the cache itself
+  (`did:web` still requires `DID_DOMAIN` to be set to run at all).
 - **Status lists:** fetched per verification by default. The bitstring is a
   static document shared by every credential from that issuer, so it caches
-  well — pass a `statusListResolver` to `verifyVP()` to serve it from your own
-  cache, CDN, or local storage. `helix-api` already does this for the list it
-  hosts.
+  well. `helix-api` already caches the list it hosts.
 - **Session token bridge:** For high-frequency scenarios (1000+ RPS), verify
   the VC once (~5ms), issue an ephemeral JWT for subsequent calls (~0.1ms).
   Best of both worlds.
@@ -418,7 +417,7 @@ This is a pnpm workspace. The current SDK package is `@helixid/sdk-js`, backed b
 
 #### Configure the API
 
-Create or update `.env`. The default runtime is **no external infra** beyond the API process itself: `sqlite` storage + in-memory cache + `did:web`.
+Create or update `.env`. Postgres is the default storage backend; this section configures `sqlite` instead for a self-contained local setup — no external infra beyond the API process itself — with an in-memory cache and `did:web`.
 
 ```bash
 NODE_ENV=development
@@ -569,15 +568,16 @@ If you prefer not to manage a JWT secret, the verifier can cache the VP verifica
 
 ```typescript
 // first call — verify and cache
-const result = await verifyVP(incomingVP, { expectedTargetService: 'orders-service' })
-await cache.set(`vp:${result.vpId}`, result, { ttl: result.expiresInSeconds })
+const result = await verifyVP(incomingVP, client, { expectedTargetService: 'orders-service' })
+const ttl = Math.max(0, Math.floor((new Date(incomingVP.expirationDate).getTime() - Date.now()) / 1000))
+await cache.set(`vp:${result.vpId}`, result, { ttl })
 
 // subsequent calls — cache hit, no re-verification
 const cached = await cache.get(`vp:${incomingVP.id}`)
 if (cached) return handleRequest(cached)
 ```
 
-The VP's own expiry (`validUntil`) naturally bounds the cache TTL. No secret management required. Use this pattern for single-verifier deployments where the cache is local to the service.
+The VP's own expiry (`expirationDate`) naturally bounds the cache TTL. No secret management required. Use this pattern for single-verifier deployments where the cache is local to the service.
 
 ## Project structure
 
@@ -585,15 +585,17 @@ The VP's own expiry (`validUntil`) naturally bounds the cache TTL. No secret man
 helixid/
 ├── src/        # Fastify server entrypoint
 ├── prisma/     # schema and migrations
-├── tests/      # unit + live suites
+├── tests/      # live suites (unit tests live in @helixid/core)
 ├── e2e/        # end-to-end package
 ├── examples/   # runnable demos — see examples/README.md
 ├── scripts/    # setup and maintenance
-└── docs/       # design decisions and proposals
+├── docs/       # design decisions and proposals
+├── Dockerfile
+└── docker-compose.local.yml
 ```
 
 The other components are separate repositories — see
-[The HelixID ecosystem](#the-helixid-ecosystem) below, or
+[The HelixID open-source ecosystem](#the-helixid-open-source-ecosystem) below, or
 **[Project Structure](https://docs.helixid.dev/get-started/project-structure)**
 for how they fit together.
 
@@ -614,12 +616,12 @@ Key areas where help is needed:
 - [GitHub Discussions](https://github.com/helixid/helixid/discussions) — questions, ideas, and show-and-tell
 - [GitHub Issues](https://github.com/helixid/helixid/issues) — bug reports and feature requests
 
-## The HelixID ecosystem
+## The HelixID open-source ecosystem
 
 | Repository | What it is |
 |---|---|
 | **helixid** — you are here | HelixID API — the issuer and verifier service |
-| [helix-core](https://github.com/helixid/helix-core) | `@helixid/core` — crypto, schemas, resolver, verification primitives |
+| [helix-core](https://github.com/helixid/helix-core) | `@helixid/core` — shared Fastify business-logic layer (crypto, schemas, resolver, routes) used by this repo and the enterprise server |
 | [helix-sdk-js](https://github.com/helixid/helix-sdk-js) | JS/TS SDK, CLI, LangChain + MCP middleware, consent widget |
 | [helix-sdk-py](https://github.com/helixid/helix-sdk-py) | `helixid-sdk-py` — the Python SDK |
 | [helix-console](https://github.com/helixid/helix-console) | Operator Console SPA |
