@@ -87,7 +87,6 @@ Local encrypted wallet and credential store.
 | `load(passphrase, filePath)` | Decrypt wallet data. |
 | `getPrivateKey(passphrase, filePath)` | Load and return private key. |
 | `addCredential(vc)` / `addCredential(vcId, vcJson, path, passphrase)` | Add VC to in-memory/file wallet. |
-| `selfIssueVC(options)` | Create and store self-signed dev credential. |
 | `updateCredential(vcId, vcJson, path, passphrase)` | Replace stored credential. |
 | `removeCredential(vcId, path, passphrase)` | Remove stored credential. |
 | `listCredentials(passphrase, path)` | List stored credential metadata. |
@@ -175,6 +174,5 @@ Binary: `helix`.
 | `helix issuer init` | Validate issuer wallet readiness. | `--wallet <path>` | None. |
 | `helix status-list create` | Create signed BitstringStatusList credential file. | `--length <bits>`, `--output <path>`, `--base-url <url>`, `--wallet <path>` | None. |
 | `helix vc issue` | Issue `HelixAgentCredential` to agent DID. | `--agent-did <did>`, `--scopes <csv>`, `--expires <duration>`, `--status-list <path>`, `--base-url <url>`, `--wallet <path>` | `--output <path>`, `--max-delegation-depth <depth>` |
-| `helix vc self-issue` | Issue self-signed dev credential to wallet. | `--scopes <csv>`, `--expires <duration>`, `--wallet <path>` | None. |
 | `helix revoke` | Revoke credential by flipping status-list bit. | `--vc-id <vcId>`, `--status-list <path>`, `--wallet <path>` | None. |
 | `helix wallet inspect` | Inspect wallet without printing private key. | `--wallet <path>` | None. |
