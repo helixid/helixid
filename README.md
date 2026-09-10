@@ -67,14 +67,6 @@ Three parties, three different jobs:
 | **AI Agent** | Asks the API for a presentation, presents it to services, delegates authority to sub-agents | Hold a private key, or sign anything itself |
 | **Service Provider** | Verifies presentations, asks the user for consent, issues Delegated Grant VCs, enforces scope | Trust an agent's self-assertion |
 
-> **On key custody.** Agents used to hold their own keys and sign locally. That
-> was retired: the server now generates an agent's keypair at onboarding and
-> holds the private key encrypted at rest, so signing a presentation is an API
-> call rather than a local operation. This is a deliberate trade — it removes
-> key distribution and rotation from every agent process, at the cost of the
-> stronger property that only the agent could ever sign for itself. Operators
-> should treat the API's admin credential accordingly.
-
 Each role's full walkthrough — including what to run and what to check — is in
 the docs: **[The Trust Stack](https://docs.helixid.dev/concepts/trust-stack)** and
 **[Authorization & Scopes](https://docs.helixid.dev/concepts/authorization-and-scopes)**.
@@ -88,8 +80,8 @@ This repository is the **HelixID API** — the issuer and verifier service
 revocation, and records the audit trail. Verification itself happens in the
 SDK, inside the calling service, not here.
 
-The default runtime is SQLite + an in-memory cache + `did:web`, with no external
-infrastructure. `did:hedera` and Postgres are opt-in.
+The default runtime is Postgres + an in-memory cache + `did:web`, with no external
+infrastructure. `did:hedera` is opt-in.
 
 > Component-by-component architecture:
 > **[The Trust Stack](https://docs.helixid.dev/concepts/trust-stack)** ·
@@ -137,11 +129,11 @@ backed by cryptographic trust that JWT can never provide.
 
 ## Quick Start
 
-Three ways in, depending on what you want to see. All run locally.
+Three ways in, depending on what you want to see.
 
 | Path | Time | Needs | Best for |
 | --- | --- | --- | --- |
-| **[5-minute path](#5-minute-path-no-infrastructure)** | 5 min | Node only | Seeing the VP build/verify cycle in code, no infra at all |
+| **[Fastest path](#fastest-path-one-running-api-no-hedera-account-needed)** | 5 min | Node + a running `helix-api` | Seeing the VP build/verify cycle in code |
 | **[Consent demo](#demo-a--user-consent-across-two-services)** | ~10 min | Docker | Watching a **user** grant consent and following the full audit trail — the best overview of what HelixID is for |
 | **[Travel Concierge demo](#demo-b--llm-agent-with-a-protected-mcp-tool)** | ~10 min | Docker + LLM key | A real LLM agent calling a protected MCP tool, plus revocation and delegation |
 
@@ -152,11 +144,31 @@ Run one demo at a time — the two TypeScript demos share ports `3000`/`8080`.
 Ports, demo sign-ins and troubleshooting for all four are in
 [`examples/README.md`](examples/README.md).
 
-### 5-minute path (no infrastructure)
+### Fastest path (one running API, no Hedera account needed)
 
-No Postgres, no Redis, no Hedera account, no running API. Works immediately after install —
-useful for testing the VP/verification flow locally, or if you already have a VC issued by
-a self-hosted issuer or any other means.
+No Hedera account, no wallet file, no key material of your own. The API generates and holds each agent's private
+key, so trying out the SDK is just standing up the API and calling it. Useful for testing
+the onboard/sign/verify flow locally, or if you already have a `helix-api` running some
+other way.
+
+**Step 0 — Get a running `helix-api`** (skip if you already have one)
+
+The only dependency here is Docker — no Postgres, no manual `.env`, no Prisma
+generation, and no sibling-repo checkout:
+
+```bash
+git clone https://github.com/helixid/helixid.git
+cd helixid
+docker compose -f docker-compose.local.yml up --build helix-api
+```
+
+Confirm it's up:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Reset it any time with `docker compose -f docker-compose.local.yml down -v`.
 
 **Step 1 — Install the SDK**
 
@@ -164,54 +176,49 @@ a self-hosted issuer or any other means.
 npm install @helixid/sdk-js
 ```
 
-**Step 2 — Generate an agent identity and load or self-issue a dev credential**
+**Step 2 — Onboard an agent and get it a credential**
+
+The server generates and holds the agent's key internally — nothing local, no
+passphrase:
 
 ```typescript
-import { AgentWallet, selfIssueVC } from '@helixid/sdk-js'
+import { HelixClient } from '@helixid/sdk-js'
 
-const wallet = await AgentWallet.create('./wallet.enc', 'dev-passphrase');
+const client = new HelixClient('http://localhost:3000', {
+  adminApiKey: 'dev-admin-key-change-in-production', // matches docker-compose.local.yml
+})
 
+// Mint a one-use enrollment token (open endpoint, no auth needed)
+const tokenRes = await fetch('http://localhost:3000/v1/enrollment-tokens', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ agentName: 'demo-agent', requestedScopes: ['read:orders'] }),
+})
+const { token } = await tokenRes.json()
 
-// If you already have a VC issued by a self-hosted issuer, CLI, or any other
-// spec-compliant source, load it directly:
-await wallet.addCredential(existingVC)
+const { agentDid, vcId } = await client.onboardAgent(token)
 
-// Quick-start only: self-issue a credential for local development.
-// Self-issued VCs carry no issuer-attested authority and are not valid for
-// production, demos that prove trust, revocation, or delegation. Verifiers
-// reject them by default because allowSelfSigned defaults to false.
-const vc = await selfIssueVC(
-  { scopes: ['read:orders'], expiresIn: 3600 },
-  wallet,
-)
-await wallet.addCredential(vc)
-
-console.log(wallet.getDID()) // did:key:z6Mk...
+console.log(agentDid) // did:key:z6Mk...
 ```
 
-**Step 3 — Build, present, and verify a VP (fully local)**
+**Step 3 — Sign and verify a VP**
 
 ```typescript
-import { VPBuilder, verifyVP } from '@helixid/sdk-js'
+import { verifyVP } from '@helixid/sdk-js'
 
-const vp = await new VPBuilder({
-  credentials: [wallet.credentials[0]],   // add a consent grant VC as a second entry when one applies
-  holderDid: wallet.getDID(),
-  userDid: 'did:web:user.example.com',
-  targetService: 'orders-service',
-}).sign(wallet.getPrivateKeyHex(), `${wallet.getDID()}#key-1`)
+// The server signs on the agent's behalf -- it holds the only copy of the key
+const vp = await client.signVP(agentDid, 'orders-service')
 
-const result = await verifyVP(vp, {
+const result = await verifyVP(vp, client, {
   expectedTargetService: 'orders-service',
-  allowSelfSigned: true,  // dev only — remove in production
+  allowSelfSigned: true, // dev only — remove in production
 })
 
 console.log(result.valid, result.agentDid, result.privilegeScopes)
 // true  did:key:z6Mk...  ['read:orders']
 ```
 
-Full round trip for local development only. No issuer, no API call, no Hedera.
-For any valid HelixID scenario, swap `selfIssueVC` for a real bootstrap token
+For any valid HelixID scenario, use a real bootstrap token
 enrollment so the root VC is signed by the trusted issuer.
 
 ---
