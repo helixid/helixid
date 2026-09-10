@@ -38,7 +38,9 @@ standalone Helix MCP server," and the rename makes the distinction
 unambiguous without relying on a doc to explain it.
 
 **Standalone Helix MCP server** (Helix's own operations — `did create`,
-`issuer init`, `status-list create`, `vc issue`/`vc self-issue`, `revoke`,
+`issuer init`, `status-list create`, `vc issue`/`vc self-issue` (**Superseded:**
+`vc self-issue` was later removed by the agent self-custody retirement,
+CHANGELOG `0.2.0`), `revoke`,
 `wallet inspect` — exposed as MCP tools so an agent can drive Helix
 conversationally, the MCP analogue of what the CLI does for a human) — one
 canonical implementation, JS only, built as `@helixid/mcp-server` alongside
@@ -112,7 +114,9 @@ existing CLI/MCP tooling decision.
 - **Added `@helixid/mcp-server`**, a new workspace package (`mcp-server/`)
   implementing the standalone MCP server above: 7 tools
   (`did_create`, `issuer_init`, `status_list_create`, `vc_issue`,
-  `vc_self_issue`, `revoke`, `wallet_inspect`) via the high-level
+  `vc_self_issue`, `revoke`, `wallet_inspect`) (**Superseded:** `vc_self_issue`
+  was later removed by the agent self-custody retirement, CHANGELOG `0.2.0`,
+  leaving 6 tools) via the high-level
   `McpServer`/`registerTool` API from `@modelcontextprotocol/sdk`, served
   over stdio (`bin/server.ts`, exposed as the `helix-mcp-server` CLI). Each
   tool wraps `@helixid/cli`'s non-printing internals

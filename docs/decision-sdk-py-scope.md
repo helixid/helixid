@@ -34,6 +34,10 @@ well-bounded set of primitives plus a REST client.
 - VP building/signing (`VPBuilder` equivalent)
 - Self-issued dev VC (`selfIssueVC` equivalent) — Local Dev Credential Flow
   has no server involved by design, same as JS
+  (**Superseded:** the agent self-custody retirement, CHANGELOG `0.2.0`,
+  later removed `selfIssueVC` and the Local Dev Credential Flow from
+  `helix-sdk-js` entirely; this JS-parity item never had a Python
+  implementation to remove.)
 
 **API calls (same endpoints `helix-sdk-js` uses post-refactor):**
 - Onboarding (challenge/response)

@@ -129,21 +129,26 @@ Surfaces used:
 
 ## 8. Local Dev Credential Flow
 
-Brief flow:
+**Retired** by the agent self-custody retirement (CHANGELOG `0.2.0`) — step 2 below
+(`selfIssueVC`) no longer exists in the SDK or CLI, and `verifyVP` no longer has a local
+verification path (step 4), so this flow can no longer run with no server involved. Kept here
+for historical reference only.
+
+Brief flow (as it worked pre-retirement):
 
 1. Create or load a local wallet.
 2. Self-issue a dev VC.
 3. Build a VP from that wallet.
 4. Verify with self-signed support only in non-production paths.
 
-Surfaces used:
+Surfaces used (pre-retirement):
 
 | Step | Surfaces |
 | --- | --- |
 | Create/load wallet | `AgentWallet.create()`, `AgentWallet.load()`. |
-| Self-issue VC | `AgentWallet.selfIssueVC()`, `helix vc self-issue`. |
+| Self-issue VC | ~~`selfIssueVC()`, `helix vc self-issue`~~ — removed. |
 | Build VP | `VPBuilder.sign()`, `HelixIDMiddleware()`, `HelixIDToolWrapper()`, `attachHelixVP()`. |
-| Verify self-signed VC | `verifyVP({ allowSelfSigned: true })`, `helixidMCPMiddleware({ allowSelfSigned: true })`. |
+| Verify self-signed VC | `verifyVP(vp, client, { allowSelfSigned: true })` — now requires a `HelixClient`; no local fallback. |
 
 ## 9. Wallet Management
 

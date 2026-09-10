@@ -44,6 +44,11 @@ instead of silently:
 - `self-signed.ts` — `selfIssueVC`. This has to stay local regardless: the
   Local Dev Credential Flow (#8) self-issues a VC with no server involved
   at all, by design. Not a candidate for folding into the API.
+  **Superseded:** the agent self-custody retirement (CHANGELOG `0.2.0`,
+  "Agent self-custody retired across the SDK/CLI/MCP/LangChain surface")
+  later reversed this — `selfIssueVC` was removed from `helix-sdk-js`
+  entirely rather than kept local. No zero-setup local self-issuance path
+  currently exists.
 - `errors/index.ts`'s error classes (`HelixError`, `ErrorCode`, and the
   specific typed errors) — so the SDK can throw typed errors matching the
   API's error codes.
