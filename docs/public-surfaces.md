@@ -25,9 +25,9 @@ Base paths are mounted from `helix-api/src/server.ts`.
 | `POST` | `/v1/vp/verify` | Verify signed VP and optionally issue session token. | `signedVP`, optional `session: true`. | Verification result, optionally session data. |
 | `GET` | `/v1/sessions/public-key` | Return API session JWT verification public key. | None. | Ed25519 public key metadata. Cacheable for 1 hour. |
 | `POST` | `/v1/enrollment-tokens` | Create enrollment token for an agent. | `agentName`, `requestedScopes`, optional `requestedDomains`, `maxDelegationDepth`. | Enrollment token/challenge metadata. |
-| `POST` | `/v1/enroll` | Legacy/direct enrollment proof flow. | `bootstrapToken`, `agentDid`, `timestamp`, `proofSignature`. | Issued VC for agent. |
-| `POST` | `/v1/onboard` | Onboarding step 1: create challenge for generated key. | `enrollmentToken`, `publicKeyHex`, optional `domains`. | `challengeId`, nonce, expiry, optional DID-create signing payload. |
-| `POST` | `/v1/onboard/verify` | Onboarding step 2: verify challenge and issue VC. | `challengeId`, `signature`, optional `didCreateSignature`. | `agentDid`, `vc`, `vcId`. |
+| `POST` | `/v1/onboard` | Onboard an agent (server-custody): redeem an enrollment token in a single call. | `enrollmentToken`, optional `domains`. | `{ agentDid, vcId }`. Server generates and holds the agent's key; no separate challenge/verify step (agent self-custody is retired). |
+| `POST` | `/v1/agents/:did/vp` | Sign a Verifiable Presentation on behalf of a server-custody agent. | DID path param, VP options. | Signed VP. Requires `x-admin-api-key`. |
+| `POST` | `/v1/agents/:did/delegate` | Delegate a slice of a server-custody agent's authority to another DID. | DID path param, `to`, `scopes`, `expiresIn`, optional `vcId`. | Delegated VC. Requires `x-admin-api-key`. |
 | `POST` | `/v1/challenges` | Issue user verification challenge. | `did`, `purpose: "user_verification"`. | Challenge id, nonce, expiry. |
 | `POST` | `/v1/challenges/:challengeId/verify` | Verify user challenge signature. | Challenge id, `signature`. | Verified DID and optional VC. |
 | `GET` | `/v1/audit-log` | List audit events. | Optional `eventType`, `since`, `limit`. | Newest-first audit summaries, including derived `delegatedFrom`, `delegatedTo`, `parentVcId`, and `delegationDepth` for VP verification events when delegation context is available; `attemptedVcId`, `attemptedParentVcId`, `attemptedDelegatedFrom` for rejections; `issuer`, `userDid`, `scopes`, `durability` for consent events. Requires `x-admin-api-key`. |
@@ -62,9 +62,9 @@ API-backed client. Construct with no args for SDK-only mode, or with API base UR
 | `checkVCStatus(vc)` | Return `active`, `revoked`, or `expired`. |
 | `fetchSessionPublicKey()` | Fetch public key for API-issued session JWTs. |
 | `verifySessionToken(token, publicKeyHex)` | Verify API session token locally. |
-| `enroll(bootstrapToken, wallet)` | Direct enrollment using wallet DID/signature; stores returned VC. |
-| `requestOnboardingChallenge(token, domains?)` | Start two-step onboarding and hold pending keypair. |
-| `completeOnboarding(challengeId, nonce, passphrase, path)` | Sign challenge, verify onboarding, save wallet. |
+| `onboardAgent(enrollmentToken, domains?)` | Redeem an enrollment token; server generates and holds the agent's key (agent self-custody is retired). |
+| `signVP(did, options)` | Sign a VP on behalf of a server-custody agent (server- or enterprise-side, depending on `apiKey`). |
+| `delegateAuthority(did, to, scopes, expiresIn, options?)` | Delegate a slice of a server-custody agent's authority to another DID. |
 | `requestUserChallenge(userDid)` | Request user verification challenge. |
 | `verifyUserChallenge(challengeId, signature)` | Verify user challenge signature. |
 
@@ -103,8 +103,7 @@ Local encrypted wallet and credential store.
 | Export | Purpose |
 | --- | --- |
 | `new VPBuilder({ credentials, holderDid, targetService, userDid? }).sign(privateKeyHex, verificationMethodId)` | Build and sign a short-lived VP for a target service. `credentials` carries 1–2 entries: exactly one agent-authority VC, plus at most one consent grant VC. `userDid` is optional; when omitted, `delegatedBy` is absent from the payload. |
-| `verifyVP(vp, options?)` | Verify VP signature, VC signature, expiry, revocation, target service, and delegation chain. |
-| `delegate(options, wallet)` | Create delegated VC from wallet credential with scoped-down privileges. |
+| `verifyVP(vp, client, options?)` | Verify VP signature, VC signature, expiry, revocation, target service, and delegation chain via `POST /v1/vp/verify` (no local fallback). |
 | `checkScope(result, requiredScope)` | Boolean scope check on `VerifyVPResult`. |
 | `requireScope(result, requiredScope)` | Throw if required scope is missing. |
 | `new SessionManager({ secret, ttl }).issue(input)` | Issue HMAC session JWT from verified agent/scopes. |
@@ -120,12 +119,10 @@ Package: `@helixid/langchain`.
 | --- | --- |
 | `HelixIDMiddleware(options)` | Returns LangChain callback config that injects `_helixVP` into object tool input before tool start. |
 | `HelixIDToolWrapper(tool, options)` | Wraps a structured tool and injects `_helixVP` before calling the original `_call`. |
-| `filterToolsByScope(tools, walletFilePath, walletPassphrase)` | Filters tools by `tool.metadata.requiredScope` or tool name against wallet VC scopes. |
+| `filterToolsByScope(tools, client, agentDid)` | Filters tools by `tool.metadata.requiredScope` or tool name against the scopes of the agent's active VC (`client.listVCs()`). |
 | `encodeBase64UrlJson(value)` | Encodes VP/object as base64url JSON. |
-| `selectVC(wallet, targetService)` | Picks matching credential for target service, falling back to first VC. |
-| `ensureObjectInput(input)` | Validates tool input is an object. |
 
-Options: `walletPassphrase`, `walletFilePath`, `targetService`, optional `userDid`.
+Options: `client` (`HelixClient`), `agentDid`, `targetService`, optional `userDid`. VPs are signed server-side via `client.signVP()`.
 
 ## MCP Adapter
 
@@ -133,13 +130,13 @@ Package: `@helixid/mcp`.
 
 | Export | Purpose |
 | --- | --- |
-| `attachHelixVP(toolCall, options)` | Client-side helper that loads wallet, signs VP, and attaches `_helixVP` to MCP tool input. |
+| `attachHelixVP(toolCall, options)` | Client-side helper that requests a server-signed VP (`client.signVP()`) and attaches `_helixVP` to MCP tool input. |
 | `helixidMCPMiddleware(options)` | Server-side middleware that requires `_helixVP`, verifies it, and enforces optional scopes. |
 
 Options:
 
-- `AttachHelixVPOptions`: `walletPassphrase`, `walletFilePath`, `targetService`, optional `userDid`.
-- `MCPMiddlewareOptions`: optional `requiredScopes`, optional `allowSelfSigned`.
+- `AttachHelixVPOptions`: `client`, `agentDid`, `targetService`, optional `userDid`.
+- `MCPMiddlewareOptions`: `client`, optional `requiredScopes`, optional `allowSelfSigned`.
 
 ## Consent Widget
 
@@ -170,7 +167,7 @@ Binary: `helix`.
 
 | Command | Purpose | Required options | Optional options |
 | --- | --- | --- | --- |
-| `helix did create` | Create DID and encrypted wallet. For `--method web`, also creates the SP's initial status list by default. | `--method <web|hedera|key>`, `--wallet <path>` | `--domain <domain>`, `--network <testnet|previewnet|mainnet>`, `--no-status-list`, `--status-list-length <bits>`, `--status-list-output <path>`, `--status-list-base-url <url>` |
+| `helix did create` | Create DID and encrypted wallet. For `--method web`, also creates the SP's initial status list by default. | `--method <web|hedera>`, `--wallet <path>` | `--domain <domain>`, `--network <testnet|previewnet|mainnet>`, `--no-status-list`, `--status-list-length <bits>`, `--status-list-output <path>`, `--status-list-base-url <url>` |
 | `helix issuer init` | Validate issuer wallet readiness. | `--wallet <path>` | None. |
 | `helix status-list create` | Create signed BitstringStatusList credential file. | `--length <bits>`, `--output <path>`, `--base-url <url>`, `--wallet <path>` | None. |
 | `helix vc issue` | Issue `HelixAgentCredential` to agent DID. | `--agent-did <did>`, `--scopes <csv>`, `--expires <duration>`, `--status-list <path>`, `--base-url <url>`, `--wallet <path>` | `--output <path>`, `--max-delegation-depth <depth>` |

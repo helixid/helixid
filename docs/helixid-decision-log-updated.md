@@ -15,7 +15,7 @@ lose the reasoning.
   any sample app.
 - It's a UI layer over SDK methods and API endpoints already catalogued in
   `public-surfaces.md`:
-  - Enroll agents (`/v1/enrollment-tokens`, `/v1/onboard`, `/v1/onboard/verify`)
+  - Enroll agents (`/v1/enrollment-tokens`, `/v1/onboard`)
   - Browse DIDs (`/v1/dids`, `/v1/dids/:did`)
   - View issued VCs (`/v1/vcs`, `/v1/vcs/:vcId`)
   - Inspect VPs as they're presented / verified
@@ -35,7 +35,7 @@ naming/references removed — we are not building on/for ThunderID).
 |---|---|
 | `frontend/` | Booking UI + chat widget |
 | `backend/` | Business logic + booking data + **verifier** (calls `verifyVP()`, checks scope) |
-| `ai-agent/` | Chat/tool orchestration + LLM calls, plus holds the wallet, enrolls, signs VPs before calling backend |
+| `ai-agent/` | Chat/tool orchestration + LLM calls, plus enrolls and requests server-signed VPs before calling backend |
 | `helixid-config/` | Scope definitions, service registration policy, enrollment token policy |
 
 Console is **not** a folder inside the sample app. Same relationship pattern
@@ -59,7 +59,7 @@ services:
   helixid-api:        # issuer/verifier backend — DIDs, VCs, status list, /v1/vp/verify
   helixid-console:     # general-purpose UI — enroll, browse DIDs/VCs/VPs, audit
   helixid-setup:       # one-shot seeder (see below)
-  ai-agent:            # sample agent — wallet, enrolls, signs VPs
+  ai-agent:            # sample agent — enrolls, requests server-signed VPs
   backend:             # booking logic + verifier (calls verifyVP())
   frontend:            # booking UI + chat widget
 ```
@@ -93,7 +93,7 @@ one.
 - Pre-registers the booking `backend` as a known VP-eligible service via
   `POST /v1/services`
 - Seeds scopes
-- Pre-onboards the demo agents (wallets + VCs already sitting in Console)
+- Pre-onboards the demo agents (agents + VCs already sitting in Console)
 - Seeds an initial status list
 - Prints the Console URL once done
 

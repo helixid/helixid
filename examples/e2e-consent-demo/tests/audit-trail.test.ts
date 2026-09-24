@@ -10,21 +10,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  clearDIDCache,
-  createEd25519Proof,
-  generateKeyPair,
-  publicKeyToMultibase,
-  VPBuilder,
-  type SignedVC,
-} from '@helixid/sdk-js';
-import { AgentWallet } from '@helixid/sdk-js';
+import { clearDIDCache, HelixClient, type SignedVC } from '@helixid/sdk-js';
 import { AIRLINE, AGENT_PRIVILEGE_SCOPES, DEMO_USER_DID } from '../helixid-config/index.js';
 import { createSpApp } from '../sp-shared/app.js';
 import type { ActivityEvent } from '../sp-shared/audit.js';
 import { provisionSpIdentity, statePath } from '../sp-shared/identity.js';
 import { SpStore } from '../sp-shared/store.js';
-import { startLiveApi, type LiveApi } from '../../../tests/utils/liveApi.js';
+import {
+  onboardLiveAgent,
+  signVPForAgent,
+  startLiveApi,
+  type LiveApi,
+} from '../../../tests/utils/liveApi.js';
 
 const HOST = 'localhost';
 const PORT = 14301;
@@ -33,7 +30,7 @@ let workDir: string;
 let api: LiveApi;
 let server: Server;
 let baseUrl: string;
-let wallet: AgentWallet;
+let client: HelixClient;
 let agentDid: string;
 let serviceDid: string;
 const recorded: ActivityEvent[] = [];
@@ -47,15 +44,13 @@ async function callTool(
   grant: SignedVC | undefined,
   correlationId: string,
 ): Promise<void> {
-  const agentVC = wallet.credentials.find((vc) =>
-    (vc.type as string[]).includes('HelixAgentCredential'),
-  )!;
-  const vp = await new VPBuilder({
-    credentials: grant ? [agentVC, grant] : [agentVC],
-    holderDid: wallet.getDID(),
+  // Server custody: the API signs with the agent's held key and attaches
+  // the agent's own authority VC itself; only the grant is passed in.
+  const vp = await signVPForAgent(client, agentDid, {
     targetService: serviceDid,
     userDid: DEMO_USER_DID,
-  }).sign(wallet.getPrivateKeyHex(), `${wallet.getDID()}#key-1`);
+    ...(grant ? { grantVC: grant } : {}),
+  });
 
   await fetch(`${baseUrl}/api/mcp`, {
     method: 'POST',
@@ -120,32 +115,13 @@ beforeAll(async () => {
     const s = app.listen(PORT, HOST, () => resolve(s));
   });
 
-  const platform = generateKeyPair();
-  const platformDid = `did:key:${publicKeyToMultibase(platform.publicKey)}`;
-  wallet = await AgentWallet.create(join(workDir, 'agent.enc'), 'demo-passphrase');
-  agentDid = wallet.did;
-
-  const now = Date.now();
-  const payload = {
-    '@context': ['https://www.w3.org/ns/credentials/v2', 'https://helixid.io/contexts/v1'],
-    id: `vc:helix:agent:${agentDid.slice(-8)}`,
-    type: ['VerifiableCredential', 'HelixAgentCredential'],
-    issuer: platformDid,
-    validFrom: new Date(now - 60_000).toISOString(),
-    validUntil: new Date(now + 24 * 3600_000).toISOString(),
-    credentialSubject: {
-      id: agentDid,
-      type: 'HelixAgent',
-      privilegeScopes: AGENT_PRIVILEGE_SCOPES,
-      agentName: 'Travel Planner Agent',
-      delegationDepth: 0,
-      maxDelegationDepth: 0,
-    },
-  };
-  await wallet.addCredential({
-    ...payload,
-    proof: await createEd25519Proof(payload, platform.privateKey, `${platformDid}#key-1`),
-  } as SignedVC);
+  client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
+  const agent = await onboardLiveAgent(api, client, {
+    agentName: 'Travel Planner Agent',
+    requestedScopes: AGENT_PRIVILEGE_SCOPES,
+    requestedDomains: ['https://travel-planner.agent.example.com'],
+  });
+  agentDid = agent.did;
 }, 60_000);
 
 afterAll(async () => {
