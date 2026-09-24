@@ -58,19 +58,19 @@ API-backed client. Construct with no args for SDK-only mode, or with API base UR
 | `getStatusList(listId)` | Fetch status list credential. |
 | `createStatusList(options?)` | Create or replace the active status list credential through the API. |
 | `getAuditLog(filters?)` | List API audit events. |
-| `verifyVP(vp, options?)` | Verify VP locally and, when API credentials are configured, record `VP_VERIFIED` / `VP_REJECTED` audit entries. |
+| `verifyVP(vp, options?)` | Verify VP via `POST /v1/vp/verify`; the API records the `VP_VERIFIED` / `VP_REJECTED` audit entry. |
 | `checkVCStatus(vc)` | Return `active`, `revoked`, or `expired`. |
 | `fetchSessionPublicKey()` | Fetch public key for API-issued session JWTs. |
 | `verifySessionToken(token, publicKeyHex)` | Verify API session token locally. |
 | `onboardAgent(enrollmentToken, domains?)` | Redeem an enrollment token; server generates and holds the agent's key (agent self-custody is retired). |
-| `signVP(did, options)` | Sign a VP on behalf of a server-custody agent (server- or enterprise-side, depending on `apiKey`). |
+| `signVP(did, targetService, options?)` | Sign a VP on behalf of a server-custody agent; options `userDid`, `grantVC`, `vcId` (server- or enterprise-side, depending on `apiKey`). |
 | `delegateAuthority(did, to, scopes, expiresIn, options?)` | Delegate a slice of a server-custody agent's authority to another DID. |
 | `requestUserChallenge(userDid)` | Request user verification challenge. |
 | `verifyUserChallenge(challengeId, signature)` | Verify user challenge signature. |
 
 ### `AgentWallet`
 
-Local encrypted wallet and credential store.
+Local encrypted wallet and credential store for a DID whose key the caller holds (e.g. an issuer/SP DID from `helix did create`). Agents don't use one — their keys are server-held.
 
 | Method | Purpose |
 | --- | --- |
@@ -93,8 +93,6 @@ Local encrypted wallet and credential store.
 | `getCredential(vcId, passphrase, path)` | Fetch one stored credential metadata entry. |
 | `getLatestCredential(options, passphrase, path)` | Fetch latest credential, optionally by VC type. |
 | `AgentWallet.credentialFromVC(vcId, vc)` | Build wallet metadata from VC JSON. |
-| `AgentWallet.generateKeypair()` | Generate a local keypair without creating a DID. |
-| `AgentWallet.fromKeypairAndCredential(keypair, vc)` | Build an ephemeral in-memory wallet from a keypair and VC. |
 | `AgentWallet.create(path, passphrase)` | Load wallet or create new `did:key` wallet file. |
 | `AgentWallet.load(path, passphrase)` | Load wallet as an `AgentWallet` instance. |
 
