@@ -93,7 +93,6 @@ Local encrypted wallet and credential store for a DID whose key the caller holds
 | `getCredential(vcId, passphrase, path)` | Fetch one stored credential metadata entry. |
 | `getLatestCredential(options, passphrase, path)` | Fetch latest credential, optionally by VC type. |
 | `AgentWallet.credentialFromVC(vcId, vc)` | Build wallet metadata from VC JSON. |
-| `AgentWallet.create(path, passphrase)` | Load wallet or create new `did:key` wallet file. |
 | `AgentWallet.load(path, passphrase)` | Load wallet as an `AgentWallet` instance. |
 
 ### VP, delegation, scopes, sessions, resolver
