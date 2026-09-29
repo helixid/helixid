@@ -45,7 +45,7 @@ HelixID is built around three distinct actors. Each has a different relationship
 | Role | Who | What they do |
 |---|---|---|
 | **Platform Operator** | The team building the AI product | Creates issuer DID, mints bootstrap tokens, issues VCs to agents, manages revocation |
-| **AI Agent** | The autonomous software process | Holds a wallet, signs VPs, presents credentials, delegates authority to sub-agents |
+| **AI Agent** | The autonomous software process | Onboards with an enrollment token, requests server-signed VPs, presents credentials, delegates authority to sub-agents |
 | **Service Provider** | The API or service the agent calls | Verifies incoming VPs, checks scopes, optionally issues a session JWT or caches the result |
 
 ### Platform Operator
@@ -67,37 +67,32 @@ The operator's private key (issuer signing key) never leaves the issuer service.
 
 ### AI Agent
 
-The agent holds a wallet containing its DID, keypair, and credentials. All signing operations are local — no private key ever leaves the agent process.
+The agent holds no keys. Onboarding generates the agent's keypair server-side and keeps it encrypted in custody; the agent only ever handles its DID, its VC id, and the signed VPs it presents.
 
 ```typescript
-import { AgentWallet, VPBuilder, delegate } from '@helixid/sdk-js'
+import { HelixClient } from '@helixid/sdk-js'
 
-// load wallet on every startup
-const wallet = await AgentWallet.loadOrCreate('./wallet.enc', process.env.WALLET_PASSPHRASE!)
+const client = new HelixClient(process.env.HELIX_API_URL!, { apiKey: process.env.HELIX_API_KEY! })
 
-// build and sign a VP — fully local, no network
-const vp = await new VPBuilder({
-  vc: wallet.credentials[0],
-  holderDid: wallet.getDID(),
-  userDid: 'did:web:user.example.com',
-  targetService: 'orders-service',
-}).sign(wallet.getPrivateKeyHex(), `${wallet.getDID()}#key-1`)
+// onboard once with the operator's enrollment token — no keypair, no wallet file
+const { agentDid } = await client.onboardAgent(process.env.ENROLLMENT_TOKEN!)
 
-// delegate to a sub-agent — fully local, self-signed (Option A)
-const childVC = await delegate(
-  { to: 'did:key:z6Mk...sub-agent', scopes: ['read:orders'], expiresIn: 3600 },
-  wallet,
-)
+// the server signs the VP with the agent's custodial key
+const vp = await client.signVP(agentDid, 'orders-service', { userDid: 'did:web:user.example.com' })
+
+// delegate a subset of scopes to a sub-agent, also signed server-side
+const childVC = await client.delegateAuthority(agentDid, 'did:web:sub-agent.example.com', ['read:orders'], 3600)
 ```
 
 ### Service Provider
 
-The verifier never needs the issuer's API at runtime. `verifyVP()` is fully local — one HTTPS fetch for the StatusList (cached after first hit), everything else resolved offline.
+`verifyVP()` calls the API's `POST /v1/vp/verify`, which checks the signature, delegation chain, expiry, target service, and revocation status server-side (and writes the `VP_VERIFIED`/`VP_REJECTED` audit event). There is no local verification path, so the verifier needs a `HelixClient`.
 
 ```typescript
-import { verifyVP, SessionManager } from '@helixid/sdk-js'
+import { HelixClient, verifyVP, SessionManager } from '@helixid/sdk-js'
 
-const result = await verifyVP(incomingVP, {
+const client = new HelixClient(process.env.HELIX_API_URL!)
+const result = await verifyVP(incomingVP, client, {
   expectedTargetService: 'orders-service',
 })
 
@@ -200,7 +195,7 @@ docker-compose up
 
 This starts the issuer API (sqlite + in-memory cache + `did:web`), the
 **HelixID Console**, the travel-concierge web app, and two pre-provisioned
-agent wallets. A one-shot setup service pre-registers the booking backend as
+custodial agents. A one-shot setup service pre-registers the booking backend as
 a known service, seeds scopes, pre-onboards the demo agents, and seeds a
 status list — fully wired, nothing else to configure.
 

@@ -12,9 +12,7 @@ import {
 } from '../utils/liveApi.js';
 
 // Renewal here is HelixClient.renewVC() — the server-signed path for a VC the
-// hosted issuer originally signed (which is what onboarding produces). This
-// is distinct from the SDK's renewAgentVC()/prepare-finalize path, which is
-// for VCs the agent self-signed and must re-sign itself.
+// hosted issuer originally signed (which is what onboarding produces).
 describe('VC Renewal Live Integration', () => {
   let api: LiveApi;
 
