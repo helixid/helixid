@@ -165,7 +165,6 @@ If you are running HelixID in production, these are the highest-leverage things 
 - [Reporting a Vulnerability](https://docs.helixid.dev/security/reporting-a-vulnerability) — this policy on the docs site
 - [The Trust Stack](https://docs.helixid.dev/concepts/trust-stack) — architectural security model
 - [The Two-Issuer Model](https://docs.helixid.dev/concepts/two-issuer-model) — why authority is the intersection of two credentials
-- [`docs/decisions.md`](docs/decisions.md) — the append-only decision log
 
 ---
 

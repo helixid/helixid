@@ -85,7 +85,7 @@ async function issueGrantFor(scopes: string[]): Promise<SignedVC> {
 beforeAll(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'helix-audit-trail-'));
   clearDIDCache();
-  // issueGrant() and verifyVP() are API-mediated (docs/proposal-sdk-api-only.md),
+  // issueGrant() and verifyVP() are API-mediated (the SDK-API-only design),
   // so the SP needs a real helix-api to call — a fresh, fully-local (SQLite,
   // did:key) instance per run, same as the root workspace's own live suite.
   api = await startLiveApi();

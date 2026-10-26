@@ -44,7 +44,7 @@ export interface SpAppOptions {
   baseUrl: string;
   /**
    * Where the shared helix-api instance lives. VP verification is always an
-   * API call (docs/proposal-sdk-api-only.md) -- even for an SP with its own
+   * API call (the SDK-API-only design) -- even for an SP with its own
    * independent did:web identity, verifying a *presented* VP means resolving
    * and checking a chain of DIDs, VCs and revocation state that the SP itself
    * doesn't own, so it goes through the one shared verifier rather than each
@@ -396,7 +396,7 @@ export function createSpApp(options: SpAppOptions): SpApp {
     let agentDid: string;
     try {
       // One verification implementation: the SDK's verifyVP(), which is always
-      // an API call to the shared helix-api (docs/proposal-sdk-api-only.md). It
+      // an API call to the shared helix-api (the SDK-API-only design). It
       // checks the agent VC, the grant (agent-match AND user-match), both
       // signatures, both validity windows, and revocation — failing closed on
       // any of them.

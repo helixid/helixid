@@ -226,7 +226,8 @@ async function ensureIssuerDidCached(): Promise<void> {
   });
 }
 
-await app.register(didRoutes, { didService });
+// Deactivation is owner-only; on a self-hosted server the operator (admin key) owns every DID.
+await app.register(didRoutes, { didService, adminApiKey: config.HELIX_ADMIN_API_KEY });
 await app.register(didWebRoutes, { issuerDid: config.HELIX_ISSUER_DID, didDomain: config.DID_DOMAIN, didRepository });
 await app.register(vcRoutes, {
   prefix: '/v1/vcs',

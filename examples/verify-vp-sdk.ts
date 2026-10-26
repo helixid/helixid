@@ -8,7 +8,7 @@ import { createFreshSignedVP } from './verifier-example-utils.js';
 //
 // Purpose
 // - Demonstrates verification via the SDK's `verifyVP()`, which (per the SDK-API-only
-//   architecture, docs/proposal-sdk-api-only.md) always calls the API's
+//   architecture, the SDK-API-only design) always calls the API's
 //   POST /v1/vp/verify under the hood -- there is no local-only verification path
 //   anymore. VP signature, VC signature, validity window, revocation (StatusList),
 //   and delegation-chain checks all happen server-side.

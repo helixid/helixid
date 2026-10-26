@@ -131,7 +131,7 @@ export async function heldGrant(
 
 export async function startHarness(airlinePort: number, hotelPort: number): Promise<Harness> {
   const workDir = await mkdtemp(join(tmpdir(), 'helix-crossepic-'));
-  // issueGrant() and verifyVP() are API-mediated (docs/proposal-sdk-api-only.md),
+  // issueGrant() and verifyVP() are API-mediated (the SDK-API-only design),
   // so both SPs need a real helix-api to call — a fresh, fully-local (SQLite,
   // did:key) instance per run, same as the root workspace's own live suite.
   const api = await startLiveApi();

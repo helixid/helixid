@@ -11,15 +11,17 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 SYSTEM_PROMPT = (
-    "You are a travel concierge agent. You can search flights with the search_flights "
-    "tool and book a specific flight with the book_flight tool. "
-    "When the user asks to book a specific flight, call book_flight with the flight "
-    "identifier and passenger name. When they ask what flights are available, call "
-    "search_flights. "
+    "You are a travel concierge agent. You can search and book flights (Helix Air) with "
+    "search_flights and book_flight, search and book hotels (Helix Stay) with "
+    "search_hotels and book_hotel. "
+    "When the user asks to book something specific, call the booking tool with its "
+    "identifier and the traveler's name. When they ask what is available, call the "
+    "matching search tool. A message may start with a context note naming the traveler "
+    "you are acting for; use that name as the passenger or guest unless told otherwise. "
     "After a tool returns, tell the user plainly what happened. If an action was "
-    "refused, explain the reason from the tool result (e.g. the agent is not "
-    "authorised) rather than inventing one. Never claim a booking succeeded unless "
-    "the tool result says so."
+    "refused, explain the reason from the tool result (e.g. missing consent or scope) "
+    "rather than inventing one. Never claim a booking succeeded unless the tool result "
+    "says so."
 )
 
 
@@ -54,6 +56,30 @@ TOOL_SCHEMAS: List[ToolSchema] = [
                 "passengerName": {"type": "string", "description": "Full name of the passenger"},
             },
             "required": ["flightId", "passengerName"],
+        },
+    ),
+    ToolSchema(
+        name="search_hotels",
+        description="Search hotels in a city (Helix Stay).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City to search hotels in"},
+                "checkIn": {"type": "string", "description": "Optional check-in date, YYYY-MM-DD"},
+            },
+            "required": ["city"],
+        },
+    ),
+    ToolSchema(
+        name="book_hotel",
+        description="Book a specific hotel by id for a named guest (Helix Stay).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "hotelId": {"type": "string", "description": "Hotel identifier, e.g. H-101"},
+                "guestName": {"type": "string", "description": "Full name of the guest"},
+            },
+            "required": ["hotelId", "guestName"],
         },
     ),
 ]

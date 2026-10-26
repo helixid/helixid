@@ -57,13 +57,14 @@ async function main(): Promise<void> {
     id: INITIAL_PERSONA.id,
     displayName: INITIAL_PERSONA.displayName,
     scopes: [...INITIAL_PERSONA.scopes],
+    group: 'Seeded at startup',
   });
   await addPersona(persona);
 
   log('Helix ID', `Issued credential ${vcId}.`);
   log('Agent', `DID: ${did}`);
   log('Agent', `Scopes: ${persona.scopes.join(', ')}`);
-  log('Agent', `Agent DID ${persona.agentDid} — key held by the platform, not written locally.`);
+  log('Agent', `Agent DID ${persona.did} — key held by the platform, not written locally.`);
   log('Setup', `Seed complete. Token, enrollment and issuance events are now in Console → Audit (${CONSOLE_URL}).`);
 }
 
