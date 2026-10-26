@@ -151,7 +151,7 @@ model Challenge {
 model PreparedPayload {
   id                String    @id @default(cuid())
   token             String    @unique
-  // 'delegation' | 'grant' — see docs/proposal-sdk-api-only.md. One purpose
+  // 'delegation' | 'grant' — see the SDK-API-only design. One purpose
   // per row; the finalize endpoint for a given purpose rejects tokens
   // prepared for a different one (PreparedPayloadPurposeMismatchError).
   purpose           String

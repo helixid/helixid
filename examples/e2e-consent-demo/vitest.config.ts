@@ -31,7 +31,7 @@ export default defineConfig({
     // The 5-step flow drives two real HTTP servers end to end.
     testTimeout: 30_000,
     env: {
-      // issueGrant()/verifyVP() are API-mediated (docs/proposal-sdk-api-only.md),
+      // issueGrant()/verifyVP() are API-mediated (the SDK-API-only design),
       // so tests/utils/liveApi.ts's startLiveApi() boots a real helix-api per
       // suite. SQLite keeps that fully local — no Postgres/DATABASE_URL needed.
       LIVE_STORAGE_ADAPTER: 'sqlite',

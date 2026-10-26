@@ -42,7 +42,7 @@ describe('VC Expiry Live Integration', () => {
       });
 
       // VP construction moved fully client-side (VPBuilder, over a held VC)
-      // once /v1/vp/template was removed — see docs/proposal-sdk-api-only.md.
+      // once /v1/vp/template was removed — see the SDK-API-only design.
       // Pinned to the short-lived VC: the agent also holds its onboarding
       // credential, so the default subject-only lookup would be ambiguous.
       const signedVP = await signVPForAgent(client, agent.did, {

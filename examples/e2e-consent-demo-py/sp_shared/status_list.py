@@ -9,7 +9,7 @@
 # src/core/status-list/index.ts (W3C Bitstring Status List: gzip-compressed,
 # base64url-encoded bit array). Previously imported from helix_cli.status_list,
 # but that module no longer exists -- helix_cli was removed from
-# helix-sdk-py entirely (see helix-sdk-py's docs/decisions.md, "CLI stays
+# helix-sdk-py entirely (see helix-sdk-py's the decision log, "CLI stays
 # JS-only"), so this is now a small, self-contained local implementation
 # instead of a shared-SDK dependency.
 
