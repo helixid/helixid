@@ -87,8 +87,7 @@ services:
       CONSOLE_URL: http://localhost:8082
       HELIX_API_URL: http://helix-api:3000
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
+      STATE_DIR: /wallets
     volumes:
       - wallets:/wallets
     depends_on:
@@ -103,7 +102,14 @@ services:
       - "7101:7100"
     environment:
       HELIX_API_URL: http://helix-api:3000
+      # The MCP server plays Helix Air and Helix Stay: it enrolls both as
+      # services and asks the API to sign consent grants with their keys,
+      # both admin-gated in OSS.
+      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
       MCP_PORT: "7100"
+      STATE_DIR: /wallets
+    volumes:
+      - wallets:/wallets
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7100/health')"]
       interval: 5s
@@ -132,10 +138,9 @@ services:
       AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
       HELIX_API_URL: http://helix-api:3000
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      MCP_SERVER_URL: http://mcp-server:7100/mcp
+      MCP_BASE_URL: http://mcp-server:7100
       AGENT_PORT: "4000"
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
+      STATE_DIR: /wallets
     volumes:
       - wallets:/wallets
     healthcheck:

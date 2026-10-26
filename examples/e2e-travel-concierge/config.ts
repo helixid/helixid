@@ -16,29 +16,75 @@ export const SCOPES = {
   FLIGHTS_BOOK: 'write:orders',
 } as const;
 
-/** The two protected MCP tools, each gated by one scope. */
+/** The protected MCP tools: flights at Helix Air, hotels at Helix Stay. */
 export const TOOLS = {
   BOOK: 'book_flight',
   SEARCH: 'search_flights',
+  SEARCH_HOTELS: 'search_hotels',
+  BOOK_HOTEL: 'book_hotel',
 } as const;
 
-/** Back-compat alias — the primary protected tool. */
-export const PROTECTED_TOOL = TOOLS.BOOK;
+export type ServiceId = 'air' | 'stay';
+
+export interface ServiceDefinition {
+  id: ServiceId;
+  /** Enrolled under this name, so a restart finds the same service (and DID) again. */
+  name: string;
+  domain: string;
+  /**
+   * Helix Stay only books on behalf of a traveler who consented: a VP that
+   * names no user is refused with CONSENT_REQUIRED. Helix Air also accepts
+   * an agent acting on its own organization-issued authority.
+   */
+  requireUserConsent: boolean;
+  tools: { name: string; requiredScope: string }[];
+}
 
 /**
- * The service the VP is bound to. The agent stamps this into every presentation
- * (`targetService`) and the MCP server is the audience. It is a plain string
- * identifier — not a URL — and does not need to be pre-registered for the
- * shipped verify + scope path this demo uses.
+ * The two Service Providers the MCP server plays. Each is enrolled as a
+ * service on the platform (POST /v1/services), which mints its
+ * did:web and holds its key -- VPs are bound to that DID (`targetService`)
+ * and consent grants for it are signed with it.
  */
-export const TARGET_SERVICE = 'travel-booking-mcp';
+export const SERVICES: Record<ServiceId, ServiceDefinition> = {
+  air: {
+    id: 'air',
+    name: 'Helix Air (travel concierge demo)',
+    domain: 'air.concierge-demo.example',
+    requireUserConsent: false,
+    tools: [
+      { name: TOOLS.SEARCH, requiredScope: SCOPES.FLIGHTS_READ },
+      { name: TOOLS.BOOK, requiredScope: SCOPES.FLIGHTS_BOOK },
+    ],
+  },
+  stay: {
+    id: 'stay',
+    name: 'Helix Stay (travel concierge demo)',
+    domain: 'stay.concierge-demo.example',
+    requireUserConsent: true,
+    tools: [
+      { name: TOOLS.SEARCH_HOTELS, requiredScope: SCOPES.FLIGHTS_READ },
+      { name: TOOLS.BOOK_HOTEL, requiredScope: SCOPES.FLIGHTS_BOOK },
+    ],
+  },
+};
+
+/** Which service each tool belongs to. */
+export function serviceForTool(toolName: string): ServiceDefinition | undefined {
+  return Object.values(SERVICES).find((service) => service.tools.some((tool) => tool.name === toolName));
+}
 
 /**
- * A demo user DID the agent claims to act on behalf of. In production this
- * comes from a real user-DID verification flow before the agent acts; here it
- * is a fixed placeholder so the happy path is deterministic.
+ * Demo travelers an agent can act on behalf of. A consent grant records the
+ * user as `credentialSubject.userDid`; in production that DID comes from a
+ * real sign-in, here it is fixed so the scenarios are deterministic.
  */
-export const USER_DID = 'did:web:demo-traveler';
+export const USERS = {
+  ada: { id: 'ada', name: 'Ada Lovelace', did: 'did:example:traveler:ada-lovelace' },
+  grace: { id: 'grace', name: 'Grace Hopper', did: 'did:example:traveler:grace-hopper' },
+} as const;
+
+export type UserId = keyof typeof USERS;
 
 /**
  * The one persona enrolled at setup time, so the demo works immediately. It can
@@ -57,12 +103,10 @@ function required(name: string): string {
   return value;
 }
 
-const walletsDir = process.env.WALLETS_DIR ?? '/wallets';
+/** Shared volume for this app's local state (persona manifest, grant index, service DIDs). */
+const stateDir = process.env.STATE_DIR ?? process.env.WALLETS_DIR ?? '/wallets';
 
 /** Encrypted wallet file for a given persona, on the shared volume. */
-export function walletPathFor(personaId: string): string {
-  return join(walletsDir, `${personaId}.enc`);
-}
 
 /** Config resolved from the environment, with container-friendly defaults. */
 export const env = {
@@ -70,13 +114,17 @@ export const env = {
   helixApiUrl: process.env.HELIX_API_URL ?? 'http://helix-api:3000',
   /** Admin key used by Console and admin API surfaces; runtime onboarding consumes Console tokens. */
   adminApiKey: process.env.HELIX_ADMIN_API_KEY ?? 'dev-admin-key-change-in-production',
-  /** Directory holding per-persona wallets + the persona manifest. */
-  walletsDir,
   /** Manifest listing every enrolled persona (survives restarts on the volume). */
-  personaManifestPath: join(walletsDir, 'personas.json'),
-  walletPassphrase: process.env.WALLET_PASSPHRASE ?? 'demo-passphrase',
-  /** MCP server URL the agent connects to. */
-  mcpServerUrl: process.env.MCP_SERVER_URL ?? 'http://mcp-server:7100/mcp',
+  personaManifestPath: join(stateDir, 'personas.json'),
+  /** Local index of consent grants issued through this demo (the platform holds the grants themselves). */
+  grantIndexPath: join(stateDir, 'grants.json'),
+  /**
+   * The DIDs of the two demo services, once enrolled. The self-hosted API
+   * has no "list my services" route, so the MCP server remembers them here.
+   */
+  serviceIndexPath: join(stateDir, 'services.json'),
+  /** MCP server base URL; each service is served at <base>/mcp/<serviceId>. */
+  mcpBaseUrl: (process.env.MCP_BASE_URL ?? 'http://mcp-server:7100').replace(/\/+$/, ''),
   /** Ports. */
   mcpPort: Number(process.env.MCP_PORT ?? 7100),
   agentPort: Number(process.env.AGENT_PORT ?? 4000),

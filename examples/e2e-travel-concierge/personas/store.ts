@@ -12,8 +12,9 @@ let personas: Map<string, Persona> | null = null;
 async function readManifest(): Promise<Persona[]> {
   try {
     const raw = await readFile(env.personaManifestPath, 'utf8');
-    const parsed = JSON.parse(raw) as { personas?: Persona[] };
-    return Array.isArray(parsed.personas) ? parsed.personas : [];
+    const parsed = JSON.parse(raw) as { personas?: (Persona & { agentDid?: string })[] };
+    // A manifest from the previous version of this demo named the DID `agentDid`.
+    return Array.isArray(parsed.personas) ? parsed.personas.map((p) => ({ ...p, did: p.did ?? p.agentDid ?? '' })) : [];
   } catch {
     return []; // missing/empty manifest → no personas yet
   }

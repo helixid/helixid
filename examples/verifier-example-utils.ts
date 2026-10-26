@@ -119,9 +119,8 @@ export async function createFreshSignedVP(
   }
 
   // Signed by the API on the agent's behalf -- the caller never has the key.
-  // Pinning vcId keeps this unambiguous once an agent holds more than one
-  // active credential.
-  const signedVP = await client.signVP(agentDid, options.targetService, { userDid, vcId });
+  // The server picks the credentials itself: every active one the agent holds.
+  const signedVP = await client.signVP(agentDid, options.targetService, userDid ? { userDid } : {});
 
   return {
     signedVP,

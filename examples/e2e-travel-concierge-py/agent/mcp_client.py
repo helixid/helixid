@@ -24,11 +24,13 @@ class McpToolResult:
     structured: Optional[Dict[str, Any]] = None
 
 
-async def _call_mcp_tool_async(name: str, args: Dict[str, Any]) -> McpToolResult:
-    async with streamablehttp_client(env.mcp_server_url) as (read, write, _get_session_id):
+async def _call_mcp_tool_async(
+    name: str, args: Dict[str, Any], meta: Optional[Dict[str, Any]] = None
+) -> McpToolResult:
+    async with streamablehttp_client(f"{env.mcp_base_url}/mcp") as (read, write, _get_session_id):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool(name, args)
+            result = await session.call_tool(name, args, meta=meta)
             text = "\n".join(c.text for c in result.content if c.type == "text")
             return McpToolResult(
                 is_error=bool(result.isError),
@@ -37,5 +39,5 @@ async def _call_mcp_tool_async(name: str, args: Dict[str, Any]) -> McpToolResult
             )
 
 
-def call_mcp_tool(name: str, args: Dict[str, Any]) -> McpToolResult:
-    return asyncio.run(_call_mcp_tool_async(name, args))
+def call_mcp_tool(name: str, args: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> McpToolResult:
+    return asyncio.run(_call_mcp_tool_async(name, args, meta))

@@ -12,14 +12,16 @@ export interface McpToolResult {
 }
 
 export async function callMcpTool(
+  serviceId: string,
   name: string,
   args: Record<string, unknown>,
+  meta?: Record<string, unknown>,
 ): Promise<McpToolResult> {
-  const transport = new StreamableHTTPClientTransport(new URL(env.mcpServerUrl));
+  const transport = new StreamableHTTPClientTransport(new URL(`${env.mcpBaseUrl}/mcp/${serviceId}`));
   const client = new Client({ name: 'travel-concierge-agent', version: '0.1.0' });
   await client.connect(transport);
   try {
-    const result = await client.callTool({ name, arguments: args });
+    const result = await client.callTool({ name, arguments: args, ...(meta ? { _meta: meta } : {}) });
     const content = Array.isArray(result.content) ? result.content : [];
     const text = content
       .filter((c): c is { type: 'text'; text: string } => c.type === 'text')

@@ -1,56 +1,46 @@
-# E2E Travel Concierge v2 — "does this actually work?" in one command
+# E2E Travel Concierge — HelixID's trust decisions, scenario by scenario
 
-A real LLM agent enrolls with HelixID, gets a real verifiable credential, calls a
-**real MCP server**, and a protected tool runs only after `@helixid/mcp` verifies
-the agent's presentation against the **live HelixID API** — every step landing in
-Console's audit view.
+A real LLM agent calls a **real MCP server** playing two Service Providers, and
+every protected tool runs only after HelixID verifies the agent's presentation
+against the **live HelixID API** — every verification landing in Console's
+audit view.
 
-Then it goes one step further: you enroll a **second agent at runtime** (no
-restart, no config edit), switch to it in the UI, and watch HelixID **refuse** its
-booking because its credential lacks the required scope. Same request, different
-credential, different real outcome.
+The web UI walks through 18 guided scenarios (4 basics plus 14 numbered ones):
+what an organization-issued credential allows, what a traveler's **consent**
+adds, how authority flows (and stops) through **agent-to-agent delegation**,
+and **attacks that must fail**. Every scenario onboards its own fresh agents and
+checks each step's real outcome against the expected one.
 
-And then you revoke the original Concierge credential while everything is still
-running. The next booking attempt is refused because the live status list now
-marks that credential revoked — no restart, no config edit, no app-side denylist.
-
-Finally, you create two demo agents and delegate only `read:catalog` from the
-full-access Planner Agent to a no-access Research Agent. Research can search only
-after it receives the delegated credential, and still cannot book because the
-delegated authority does not include `write:orders`.
-
-There are no mocks in the HelixID trust and enforcement path. Flight inventory
-and booking responses are intentionally synthetic, but if a credential is
-missing, invalid, revoked, or lacks the right scope, the action does not happen —
-and you can prove it.
+There are no mocks in the HelixID trust and enforcement path. Flight and hotel
+inventory and booking responses are intentionally synthetic, but if a
+credential is missing, invalid, revoked, out of scope, or lacks the traveler's
+consent, the action does not happen — and you can prove it.
 
 ---
 
 ## What happens
 
 ```
-Browser ──{personaId, "book BA249 for Ada"}──▶ Agent (LLM + MCP client)
-                                                   │  1. LLM picks book_flight
-                                                   │  2. agent signs a VP with the selected
-                                                   │     persona's active credential
-                                                   ▼
-                                              MCP server ── @helixid/mcp ──▶ HelixID API
-                                                   │   POST /v1/vp/verify → VP_VERIFIED / VP_REJECTED (audit)
-                                                   │   requireScope(write:orders)
-                                                   │   tool runs  ── only if verified AND authorized
-                                                   ▼
-Browser ◀── "Booked, BKG-…"  or  "refused: lacks write:orders" ── Agent (LLM speaks the real result)
+Browser ──{personaId, onBehalfOf?, "book H-101"}──▶ Agent (LLM + MCP client)
+                     │ 1. LLM picks a tool
+                     │ 2. POST /v1/agents/:did/vp {targetService: <service DID>, userDid?}
+                     │    → VP with the agent's credential(s) + the traveler's consent grant
+                     ▼
+     MCP server: Helix Air (/mcp/air) · Helix Stay (/mcp/stay)
+        1. replay guard (each VP id once)
+        2. POST /v1/vp/verify, bound to this service → VP_VERIFIED / VP_REJECTED (audit)
+        3. consent policy (Stay acts only for a consenting traveler)
+        4. @helixid/mcp requireScope — effective scopes = agent ∩ traveler's consent
+        5. tool runs  ── only if all of the above pass
 ```
 
-- **Concierge Agent** (seeded at startup) holds `read:catalog` + `write:orders` →
-  it can search *and* book.
-- **Search Agent** (enrolled later, at runtime) holds only `read:catalog` → it can
-  search, but HelixID refuses its bookings.
-- **Revoked Concierge Agent** is the same agent with the same DID, but its
-  credential status-list bit is flipped → HelixID rejects its next VP.
-- **Delegated Research Agent** starts with no tool scopes, then presents a child
-  credential delegated by Planner Agent with only `read:catalog` → search works,
-  booking is refused.
+| Service | Tools | Policy |
+|---|---|---|
+| **Helix Air** | `search_flights` (`read:catalog`), `book_flight` (`write:orders`) | Accepts an agent acting on its own organization-issued authority |
+| **Helix Stay** | `search_hotels` (`read:catalog`), `book_hotel` (`write:orders`) | Acts only for a traveler who consented |
+
+Both services are enrolled on the API at startup (`POST /v1/services`), so each
+has a platform-minted DID, and the platform signs its consent grants with its key.
 
 ## Prerequisites
 
@@ -86,7 +76,7 @@ Some services are built from this repo, one is pulled ready-made:
 |---|---|---|
 | `helix-api` | built from this repo's root `Dockerfile` | it's the thing being demoed — you're running the code you just cloned |
 | `helixid-setup`, `mcp-server`, `agent` | built from `docker/node.Dockerfile` | demo code, lives here |
-| `web` | built from `web/` | the chat UI, lives here |
+| `web` | built from `web/` | the scenario UI, lives here |
 | `console` | **pulled** from Docker Hub (`helixid/console`) | the Console is a separate repo (`helixid/helix-console`) that publishes a multi-arch image, so there's no reason to make you clone and build it |
 
 The Console step is worth spelling out, because it's the one that used to
@@ -104,7 +94,7 @@ Wait for `helixid-setup` to print `Seed complete` and exit. Then open:
 
 | URL | What |
 | --- | --- |
-| http://localhost:8090 | **Web chat** — pick the acting agent, talk to it |
+| http://localhost:8090 | **Scenarios + chat** — pick a scenario, run its steps, talk to an agent |
 | http://localhost:8080 | **Console** — log in `admin` / `admin`, open **Audit** |
 
 > **If the chat shows a provider error:** this demo has no scripted fallback,
@@ -114,125 +104,59 @@ Wait for `helixid-setup` to print `Seed complete` and exit. Then open:
 >
 > Ports, sign-ins and troubleshooting for every demo: [`../README.md`](../README.md).
 
-## Guided use cases
+## Guided scenarios
 
-The web chat has four guided tabs. Each one exercises a different trust decision
-with the same MCP server and the same `search_flights` / `book_flight` tools.
+Open http://localhost:8090. The left sidebar lists every scenario by number —
+**hover one to see what it demonstrates and what to expect**. Select it, then
+**Run all steps** (it onboards fresh agents and runs each step, marking results
+*as expected* / *NOT as expected*), or run the steps one at a time. The chat
+panel drives the same agents through the LLM; pick who the agent acts **on
+behalf of**, and the service's consent screen pops up when consent is needed.
 
-| Use case | Persona / credential state | What to try | Expected result |
-| --- | --- | --- | --- |
-| **1 — Full-access agent** | Concierge has `read:catalog` + `write:orders` | Book a flight | Booking succeeds |
-| **2 — Read-only agent** | Runtime-onboarded agent has only `read:catalog` | Search, then book | Search succeeds; booking is refused for missing `write:orders` |
-| **3 — Revoked credential** | Concierge's issued VC is revoked through the live API | Retry booking | VP is rejected because the status-list bit is revoked |
-| **4 — Delegated agent** | Research starts with no tool scopes, then receives a Planner-signed child VC with `read:catalog` | Search, then book | Delegated search succeeds; booking is refused because the child VC lacks `write:orders` |
-
-### 1) Happy path — Concierge books
-
-Open **Use case 1 — Full-access agent**. With **Concierge Agent** selected, type
-or click **Fill booking prompt**:
-
-> **Book flight BA249 for Ada Lovelace**
-
-You get a confirmation with a booking id. Refresh Console → Audit: a fresh
-**`VP_VERIFIED`** event (plus the enrollment/issuance events from setup).
-
-### 2) Onboard a second agent at runtime, then watch it get refused
-
-In **Console**, generate an onboard/enrollment token for a booking-restricted
-agent, for example **Search Agent** with only `read:catalog`.
-
-Back in the Travel Concierge web chat, open **Use case 2 — Read-only agent** and
-click **Open onboarding**. Paste that Console-generated token, give it a display
-name such as `Search Agent`, and submit. The agent service consumes the token,
-onboards the agent through the API, and writes only local persona metadata to the
-manifest on the shared volume. The Console/HelixID database remains the
-source of truth for the real agent credential, scopes, revocation state, and
-audit events.
-
-The UI refreshes `/personas`, so **Search Agent** appears in the dropdown within
-a few seconds — no restart. Select it and try:
-
-> **Search flights from Mumbai to London** → succeeds (it has `read:catalog`).
->
-> **Book flight BA249 for Grace Hopper** → the agent explains it was **refused**
-> because it lacks `write:orders`.
-
-Switch back to **Concierge Agent** and the same booking succeeds. That difference
-is produced by HelixID, not by UI filtering — the booking tool is offered to both
-agents; only the credential decides.
-
-### 3) Revoke Concierge, then retry the same booking
-
-With **Concierge Agent** selected, first run the happy-path booking so you have a
-known-good baseline. Then open **Use case 3 — Revoked credential** in the web UI
-and click **Revoke selected agent**.
-
-The Travel Concierge agent service looks up the selected persona's active
-credential through the API and calls the live HelixID admin endpoint
-`POST /v1/vcs/:vcId/revoke`. The browser never sees the VC, VP, or admin API key.
-
-Now ask Concierge to book again:
-
-> **Book flight BA249 for Ada Lovelace**
-
-The API still signs a fresh VP for that agent, but HelixID now sees the revoked
-status-list bit and refuses the presentation. Refresh Console →
-Audit: you should see the revocation event and a rejected VP verification for the
-retry.
-
-### 4) Delegate read access to another agent
-
-Open **Use case 4 — Delegated agent** in the web UI.
-
-Click **Create demo agents**. The agent service enrolls:
-
-- **Planner Agent** with `read:catalog` + `write:orders` and
-  `maxDelegationDepth: 1`.
-- **Research Agent** with no tool scopes.
-
-At this point, Research has a real issuer-backed base VC, but it carries an empty
-`privilegeScopes` array. That credential is useful as Research's identity, not as
-tool authority. It cannot search or book.
-
-Click **Delegate read access**. The service calls `delegateAuthority()`, which
-uses Planner's HelixID-issued credential as the trusted root and has the API sign
-a child VC for Research with only `read:catalog` — Planner's key is held by the
-server, so the signature is authorized rather than produced locally. The platform
-records that child credential, and Research is marked to present it on its next
-tool call. The browser receives only safe persona metadata.
-
-With **Research Agent** selected, try:
-
-> **Search flights from Mumbai to London** → succeeds through delegated
-> `read:catalog`.
->
-> **Book flight BA249 for Ada Lovelace** → refused because the delegated
-> credential does not contain `write:orders`.
-
-This proves delegation cannot exceed the parent credential: the delegated scope
-may be equal to or narrower than the parent, but it cannot add new authority.
-Research's base credential cannot search or book; the delegated child credential
-adds only `read:catalog`, so Research can search but cannot escalate to booking.
-Self-issued VCs are not used as trusted delegation roots in this scenario; they
-are only for quick-start/local development flows.
+| # | Scenario | What it proves |
+|---|---|---|
+| A | Full-access agent | An org credential with `read:catalog` + `write:orders` can search and book |
+| B | Read-only agent | Same tools, narrower credential: booking refused (`INSUFFICIENT_SCOPE`) |
+| C | Revoked credential | Revoke live; the next call is refused — no restart, no denylist |
+| D | Agent → agent delegation | Planner delegates only `read:catalog` to a no-scope Research agent |
+| 1 | User → agent consent | Helix Stay refuses until Ada consents; her consent is a grant signed by Helix Stay |
+| 2 | User → agent → agent | Ada's consent to the Concierge flows to the Hotel Scout it delegates to; Grace's (never given) doesn't |
+| 3 | Session vs standing consent | "Just this trip" = 24h grant, "always" = long-lived; both reused without re-prompting |
+| 4 | Traveler revokes consent | The agent stops acting for Ada, but still works for Grace and on its own authority |
+| 5 | Two travelers, one agent | Ada's grant does nothing for Grace; consenting to *search only* still blocks booking |
+| 6 | Two services | Stay consent doesn't open Air; a VP signed for Stay is rejected by Air |
+| 7 | Delegation depth limit | `maxDelegationDepth: 1` allows one hop; the second is refused |
+| 8 | Revoking the parent | Revoke Planner and Research's delegated authority disappears |
+| 9 | Delegation that expires | A 20-second delegation: allowed inside the window, refused after |
+| 10 | Replaying a captured VP | Second use of the same VP refused (`VP_REPLAYED`) |
+| 11 | Tampering with a credential | Editing scopes inside a signed VP breaks the signature |
+| 12 | Scope escalation in delegation | A read-only Planner can't delegate `write:orders` |
+| 13 | Prompt injection | A hotel listing tells the AI to book a ₹48,000 suite; Ada consented to search only |
+| 14 | Deactivated agent DID | Retire the agent's DID — **see the did:key caveat below; expected to show a gap here** |
 
 ### Prove the enforcement is real (no LLM in the loop)
 
 Call the MCP tool directly with **no presentation** — refused by HelixID, not the app:
 
 ```sh
-curl -s http://localhost:7100/mcp \
+curl -s http://localhost:7100/mcp/air \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
        "params":{"name":"book_flight","arguments":{"flightId":"BA249","passengerName":"Mallory"}}}'
-# → tool result is an error: "Refused by HelixID: no verifiable presentation was supplied."
+# → tool result is an error: "Refused by HelixID at Helix Air [VP_MISSING]: no verifiable presentation was supplied."
 ```
+
+The agent's building blocks are plain HTTP too — e.g. `POST /call-tool`
+(`personaId`, `toolName`, `input`, optional `userId`), `POST /consent`,
+`POST /delegate-agent`, `POST /revoke-agent`, `POST /revoke-grant`, and the
+attacks under `/attack/*`. `POST /onboard-agent` also accepts a one-use `token`
+generated in Console, whose scopes win over the requested ones.
 
 ### Reset
 
 ```sh
-docker compose down -v      # wipes HelixID SQLite state and the persona manifest
+docker compose down -v      # wipes HelixID SQLite state, personas, grant index and service DIDs
 ```
 
 ## Configuration
@@ -245,7 +169,7 @@ docker compose down -v      # wipes HelixID SQLite state and the persona manifes
 | `AZURE_OPENAI_DEPLOYMENT` | agent | — | `azure` only — chat deployment name (used as the model) |
 | `AZURE_OPENAI_API_VERSION` | agent | `2024-10-21` | `azure` only |
 | `HELIX_ADMIN_API_KEY` | setup, console | `dev-admin-key-change-in-production` | Demo admin key for Console/API admin surfaces |
-| `HELIX_ADMIN_API_KEY` | setup, agent | `dev-admin-key-change-in-production` | Also used by the agent to sign presentations — see below |
+| `HELIX_ADMIN_API_KEY` | setup, agent, mcp-server | `dev-admin-key-change-in-production` | Also used to sign presentations, delegate, revoke, and enroll the services / sign their grants — see below |
 
 For Azure OpenAI, set `LLM_PROVIDER=azure`, put the resource key in `LLM_API_KEY`,
 and set `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` (a deployment of a
@@ -255,88 +179,58 @@ The HelixID API's identity settings (`DID_METHOD=key`, the issuer DID, the signi
 key) are fixed in `docker-compose.yml` because they must agree with each other;
 they're dev values and clearly marked.
 
-## Personas, key custody, and the browser boundary
+## Key custody and the browser boundary
 
-- A **persona** is a selectable onboarded-agent context: its own DID, credential,
-  and scopes. The active persona is the agent the API signs the next protected
-  tool call for.
-- **Agents hold no keys.** Self-custody is retired: the server generates each
-  agent's keypair at onboarding and holds the private key encrypted at rest, so a
-  presentation is signed by `POST /v1/agents/:did/vp` rather than locally. That
-  route is admin-gated in OSS, so the agent service holds the admin key — a real
-  reduction in scoping versus self-custody, where only the agent's own key could
-  sign for itself.
-- An agent can hold multiple VCs. The demo stores the selected VC id as
-  `activeCredentialId`: normal personas use their issuer-issued base VC, while
-  delegated Research uses the Planner-delegated child VC. With no
-  `activeCredentialId` the server picks the agent's single active credential
-  itself; once delegation has given Research a second one, the choice has to be
-  explicit, and an unknown id fails rather than silently using the wrong
-  credential.
-- The persona registry is app-local convenience state for this demo: it lets the
-  Travel Concierge UI list and select agents. It stores safe metadata such as the
-  agent DID and `activeCredentialId`, never the VC itself, and is deliberately
-  separate from the Console/HelixID database.
-- The Console/HelixID database is the source of truth for onboarding,
-  credentials and their scopes, status lists, revocation, and API audit events.
-  Delegated child VCs are recorded there too, so a later hop can find them. In a
-  real deployment, the agent app and the organization Console would be hosted
-  separately and would not share a database.
-- The local persona registry is backed by the shared volume today, so
-  runtime-onboarded agents survive restarts and a freshly-booted agent sees them.
-- The **browser never handles credential material**: chat only sends
-  `{ personaId, message, conversationId }` and receives `{ reply }`. During
-  onboarding, the browser carries the one-time Console-generated token to the
-  agent service, but it never receives a VC, VP, or admin key.
-- Conversation history is keyed by `(conversationId, personaId)`, so one agent's
-  context never leaks into another's.
+- **Agents hold no keys.** The server generates each agent's keypair at
+  onboarding and holds it encrypted at rest; every presentation is signed by
+  `POST /v1/agents/:did/vp`. That route is admin-gated in OSS, so the agent
+  service holds the admin key. The MCP server holds it too, to enroll the two
+  services and ask the API to sign their consent grants.
+- **The browser never handles credential material**: it sends persona ids,
+  traveler ids and messages, and receives replies, tool outcomes and safe
+  persona metadata — never a VC, VP or key.
+- The persona manifest, grant index and service DIDs are app-local
+  convenience state on the shared volume. The HelixID database remains the
+  source of truth for agents, credentials, grants, status lists and audit events.
+- Conversation history is keyed by `(conversationId, personaId, traveler)`, so
+  one agent's context never leaks into another's.
 
 ## Layout — one file, one job
 
 ```
-config.ts                 shared constants (scopes, tools, target service, state dir)
-personas/                 the runtime persona model
-  store.ts                manifest-backed registry (list / get / add), on the shared volume
-  enroll.ts               shared onboarding (Console/setup token → POST /v1/onboard)
-helixid-setup/seed.ts     run-once: onboard the Concierge persona → manifest → exit 0
-mcp-server/server.ts      real MCP server; search_flights + book_flight, each guarded by @helixid/mcp
+config.ts                  scopes, tools, the two services, demo travelers, env
+personas/
+  store.ts                 manifest-backed persona registry on the shared volume
+  enroll.ts                enrollment token → POST /v1/onboard
+  grants.ts                local index of consent grants issued through the demo
+  platform.ts              admin-key calls to the API, waiting out rate limits
+helixid-setup/seed.ts      run-once: onboard the initial Concierge persona → exit 0
+mcp-server/
+  server.ts                Helix Air + Helix Stay: replay guard, verify, consent policy, scope
+  serviceRegistry.ts       enrolls both services once; signs consent grants
 agent/
-  server.ts               GET /personas, POST /chat, onboarding, revocation, delegation demo routes
-  chat/providers/         anthropic (default) | openai | azure adapter (v1 SPEC §5.7 pattern)
-  chat/runChatTurn.ts     LLM tool-loop; runs every tool call as the selected persona
-  tools/protectedCall.ts  the only place a VP is requested (per-persona active credential)
-web/                      static chat UI (nginx): persona selector + reverse-proxy to the agent
-docker/                   Dockerfiles + the Console nginx override
+  server.ts                the HTTP building blocks the scenarios combine
+  attacks.ts               replay, tamper, wrong-service
+  tools/protectedCall.ts   the only place a VP is requested
+  chat/                    LLM tool loop + providers
+web/                       the scenario UI (nginx): sidebar, steps, chat, consent screen
 ```
-
-Within the Travel Concierge application, only `helixid-setup/`, `personas/`, and
-`agent/` request VC or VP material, and none of them ever holds a key. The
-HelixID API issues and stores credentials and signs presentations; the MCP server
-receives and verifies VPs; the web app doesn't know HelixID exists.
 
 ## Shipped-capability notes (honest caveats)
 
-- **Verification vs. authorization in the audit trail.** The shipped API's
-  `/v1/vp/verify` audits the *verification* result: `VP_VERIFIED` for a valid
-  presentation, `VP_REJECTED` for a forged/expired/revoked one. It does **not**
-  model scope. So when the Search Agent is refused for lacking `write:orders`, its
-  presentation still shows as `VP_VERIFIED` in Console (its identity *was* verified)
-  — the scope denial is enforced by `@helixid/mcp` and surfaced in the MCP server
-  logs and back to the agent. There is no shipped "insufficient-scope" audit event
-  to emit; we don't fabricate one.
-- **`@helixid/mcp` verifies but does not emit an audit event.** Its middleware runs
-  `verifyVP` locally (real: it resolves the issuer DID and checks the live status
-  list) and enforces scope — that is the decision. To make the *verification* also
-  visible in Console, `mcp-server` additionally calls the API's authoritative
-  `POST /v1/vp/verify`. Both calls are real. If `@helixid/mcp` gains audit emission
-  upstream, that second call can be dropped.
-- **Delegated children inherit parent revocation.** Locally agent-signed child VCs
-  do not receive an independent status-list entry. Both the authoritative API
-  `/v1/vp/verify` path and the SDK/MCP verifier resolve and validate the complete
-  delegation chain, then check each status-bearing ancestor. Revoking the root
-  or another status-bearing parent therefore rejects all descendants.
-- **Authorization is the shipped scope/expiry/revocation check**, not OPA/Rego
-  (which isn't live) — the same `verifyVP` + `requireScope` path v1 uses.
-- **Guided revocation is intentionally destructive for that demo run.** Once you
-  revoke Concierge, its existing credential will keep failing until you reset the
-  demo state with `docker compose down -v` and start again.
+- **Scenario 14 can't be enforced in this did:key setup.** A `did:key`'s
+  document is derived from the DID itself, so verifiers never consult the
+  registry — deactivating it (`POST /v1/dids/:did/deactivate`) records the fact
+  but its VPs still verify. On a `did:web` platform the document answers 410
+  and the scenario passes (see the enterprise hosted example).
+- **Replay protection lives in the verifier.** `/v1/vp/verify` is stateless;
+  the MCP server remembers each VP id until it expires (in-memory).
+- **Two consent rules are enforced by the service, not the verifier:** a VP
+  that names a traveler must carry a grant (the verifier alone would accept it
+  with the agent's full scopes), and the grant's issuer must be this service
+  (the verifier checks the grant's agent and user, not its issuer).
+- **Scope and consent denials aren't audited by the API.** The presentation
+  still shows as `VP_VERIFIED` in Console (its identity *was* verified); the
+  refusal is in the MCP server log and the tool result.
+- **Authorization is the shipped scope/expiry/revocation/consent check**, not
+  OPA/Rego (which isn't live).

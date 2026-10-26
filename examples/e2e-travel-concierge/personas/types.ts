@@ -1,31 +1,52 @@
 // A "persona" is a selectable onboarded-agent context: its own DID, its own
-// credential, its own scopes. Switching personas in the UI switches which agent
-// the API signs the next protected tool call for.
-//
-// Agent self-custody is retired, so a persona owns no wallet and no key — the
-// server holds both, and a persona is identified by its DID.
+// credential, its own scopes. Switching personas in the UI switches which
+// agent presents the next protected tool call. There is no local key
+// material anywhere in this app -- agent self-custody is retired, so the
+// server generates and holds each agent's key, and every VP is signed via
+// POST /v1/agents/:did/vp (see agent/tools/protectedCall.ts).
 
 export interface Persona {
   id: string;
   displayName: string;
   /** Scopes the credential carries (informational — enforcement is server-side). */
   scopes: string[];
-  /** The agent's DID. Server custody: no wallet file, no local key material. */
-  agentDid: string;
-  /** Preferred VC for signing, used by the delegation demo after a child VC is added. */
-  activeCredentialId?: string;
-  /** Safe delegation metadata for the UI; no credential material. */
-  delegatedFromPersonaId?: string;
+  /** The agent's DID, from POST /v1/onboard -- identifies it to signVP, never a key. */
+  did: string;
+  /** The credential id POST /v1/onboard issued alongside `did`. */
+  vcId: string;
+  /**
+   * Set once a delegation lands this persona a delegated credential (see
+   * /delegate-agent). The server presents it alongside `vcId` on every VP,
+   * which is what gives a persona onboarded with zero scopes of its own
+   * (e.g. the demo's Research Agent) any authority at all.
+   */
+  delegatedVcId?: string;
+  /** Scopes the delegated credential carries, and when it lapses. */
   delegatedScopes?: string[];
+  delegatedBy?: string;
+  delegationExpiresAt?: string;
+  /** The root credential's delegation budget (0 = may not delegate). */
+  maxDelegationDepth?: number;
+  /** Which guided scenario created this persona -- only used to group the UI's agent list. */
+  group?: string;
+  /** Informational lifecycle flags, set by this app's revoke/deactivate routes. */
+  revokedAt?: string;
+  deactivatedAt?: string;
 }
 
-/** The safe projection sent to the browser: no credential material, ever. */
+/** The projection sent to the browser -- just enough to pick and label a persona. No DID-bound key material exists to leak. */
 export interface PersonaPublic {
   id: string;
   displayName: string;
   scopes: string[];
-  delegatedFromPersonaId?: string;
+  did: string;
   delegatedScopes?: string[];
+  delegatedBy?: string;
+  delegationExpiresAt?: string;
+  maxDelegationDepth?: number;
+  group?: string;
+  revokedAt?: string;
+  deactivatedAt?: string;
 }
 
 export function toPublic(p: Persona): PersonaPublic {
@@ -33,7 +54,13 @@ export function toPublic(p: Persona): PersonaPublic {
     id: p.id,
     displayName: p.displayName,
     scopes: p.scopes,
-    delegatedFromPersonaId: p.delegatedFromPersonaId,
-    delegatedScopes: p.delegatedScopes,
+    did: p.did,
+    ...(p.delegatedScopes ? { delegatedScopes: p.delegatedScopes } : {}),
+    ...(p.delegatedBy ? { delegatedBy: p.delegatedBy } : {}),
+    ...(p.delegationExpiresAt ? { delegationExpiresAt: p.delegationExpiresAt } : {}),
+    ...(p.maxDelegationDepth !== undefined ? { maxDelegationDepth: p.maxDelegationDepth } : {}),
+    ...(p.group ? { group: p.group } : {}),
+    ...(p.revokedAt ? { revokedAt: p.revokedAt } : {}),
+    ...(p.deactivatedAt ? { deactivatedAt: p.deactivatedAt } : {}),
   };
 }

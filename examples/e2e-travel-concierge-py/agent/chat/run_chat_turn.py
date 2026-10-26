@@ -1,54 +1,58 @@
-# The one non-deterministic file, Python port of
-# ../../e2e-travel-concierge/agent/chat/runChatTurn.ts. A real LLM decides,
-# from the conversation, which tool to call. The agent never authors the
-# outcome sentence -- the model does, from the real tool result -- so the
-# reply reflects a cryptographically enforced decision, not a canned string.
+# The one non-deterministic file. A real LLM decides, from the conversation,
+# which tool to call. The agent never authors the outcome sentence -- the model
+# does, from the real tool result -- so the reply reflects a cryptographically
+# enforced decision, not a canned string.
 #
-# Every tool call is made *as the selected persona*: the API signs its VP.
-# History is keyed by (conversation_id, persona_id) so one agent's context
-# can never silently leak into another's.
+# Every tool call is made *as the selected persona*, and -- when the UI picks
+# a traveler -- on that traveler's behalf. History is keyed by
+# (conversation_id, persona_id, traveler) so one agent's context can never
+# silently leak into another's.
 
 from __future__ import annotations
 
-import dataclasses
 import json
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from agent.chat.providers.index import get_provider
 from agent.chat.types import LLMMessage
-from agent.tools.book_flight import book_flight
-from agent.tools.search_flights import search_flights
-from config import TOOLS
+from agent.tools.protected_call import call_protected_tool
+from config import TOOLS, USERS
 from personas.types import Persona
 
 _conversations: Dict[str, List[LLMMessage]] = {}
 
-
-def _run_tool(persona: Persona, tool_name: str, args: dict):
-    if tool_name == TOOLS["BOOK"]:
-        result = book_flight(persona, str(args.get("flightId", "")), str(args.get("passengerName", "")))
-        return dataclasses.asdict(result)
-    if tool_name == TOOLS["SEARCH"]:
-        date = args.get("date")
-        result = search_flights(persona, str(args.get("origin", "")), str(args.get("destination", "")), str(date) if date else None)
-        return dataclasses.asdict(result)
-    return {"error": f"Unknown tool: {tool_name}"}
+# The model sees plain business arguments; only these keys are forwarded to each tool.
+TOOL_ARGS: Dict[str, List[str]] = {
+    TOOLS["SEARCH"]: ["origin", "destination", "date"],
+    TOOLS["BOOK"]: ["flightId", "passengerName"],
+    TOOLS["SEARCH_HOTELS"]: ["city", "checkIn"],
+    TOOLS["BOOK_HOTEL"]: ["hotelId", "guestName"],
+}
 
 
-def run_chat_turn(persona: Persona, message: str, conversation_id: str) -> str:
-    key = f"{conversation_id}::{persona.id}"
+def run_chat_turn(persona: Persona, message: str, conversation_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    key = f"{conversation_id}::{persona.id}::{user_id or 'self'}"
     history = _conversations.get(key, [])
-    history.append(LLMMessage(role="user", content=message))
+    context = f"(Context: you are acting on behalf of traveler {USERS[user_id]['name']}.) " if user_id else ""
+    history.append(LLMMessage(role="user", content=f"{context}{message}"))
 
     provider = get_provider()
+    trace: List[Dict[str, Any]] = []
+    consent_required: Optional[Dict[str, Any]] = None
 
-    for _ in range(4):
+    def finish(reply: str) -> Dict[str, Any]:
+        _conversations[key] = history
+        out: Dict[str, Any] = {"reply": reply, "trace": trace}
+        if consent_required:
+            out["consentRequired"] = consent_required
+        return out
+
+    for _ in range(5):
         response = provider.complete(history)
 
         if response.type == "text":
             history.append(LLMMessage(role="assistant", content=response.content))
-            _conversations[key] = history
-            return response.content
+            return finish(response.content)
 
         # Record the assistant's tool-call turn so the provider history stays valid.
         history.append(
@@ -62,16 +66,19 @@ def run_chat_turn(persona: Persona, message: str, conversation_id: str) -> str:
             )
         )
 
-        result = _run_tool(persona, response.tool_name, response.args)
+        allowed = TOOL_ARGS.get(response.tool_name)
+        if allowed is None:
+            tool_result: Dict[str, Any] = {"error": f"Unknown tool: {response.tool_name}"}
+        else:
+            args = {name: str(response.args[name]) for name in allowed if response.args.get(name) is not None}
+            result = call_protected_tool(persona, response.tool_name, args, user_id=user_id)
+            trace.append({"tool": response.tool_name, "args": args, "success": result["success"], "code": result.get("code"), "detail": result["detail"]})
+            if result.get("consentRequired") and consent_required is None:
+                consent_required = result["consentRequired"]
+            tool_result = {"success": result["success"], "code": result.get("code"), "detail": result["detail"]}
 
         history.append(
-            LLMMessage(
-                role="tool",
-                tool_call_id=response.tool_call_id,
-                tool_name=response.tool_name,
-                content=json.dumps(result),
-            )
+            LLMMessage(role="tool", tool_call_id=response.tool_call_id, tool_name=response.tool_name, content=json.dumps(tool_result))
         )
 
-    _conversations[key] = history
-    return "Sorry, I wasn't able to complete that — could you rephrase?"
+    return finish("Sorry, I wasn't able to complete that — could you rephrase?")

@@ -3,222 +3,919 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Travel Concierge — HelixID demo</title>
+    <title>Travel Concierge — HelixID scenarios</title>
     <style>
-      :root { color-scheme: light dark; }
+      :root {
+        color-scheme: dark;
+        --bg: #0d1014; --panel: #151a20; --panel-2: #10141a; --line: #262d37; --line-2: #313945;
+        --text: #e7eaee; --muted: #98a2b0; --faint: #6f7987;
+        --accent: #3b82f6; --accent-soft: #3b82f61f;
+        --ok: #34c77b; --ok-soft: #34c77b1c; --bad: #f2555a; --bad-soft: #f2555a1c;
+        --warn: #e6a23c; --warn-soft: #e6a23c1f; --info: #8b9bb4; --info-soft: #8b9bb41a;
+        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
       * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        margin: 0; background: #0f1216; color: #e8eaed; display: flex;
-        min-height: 100vh; align-items: center; justify-content: center;
+        margin: 0; background: var(--bg); color: var(--text);
+        font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       }
-      .card {
-        width: min(680px, 92vw); background: #171b21; border: 1px solid #262c36;
-        border-radius: 14px; padding: 22px 22px 18px; box-shadow: 0 8px 40px rgba(0,0,0,.4);
-      }
-      h1 { font-size: 18px; margin: 0 0 2px; }
-      .sub { color: #9aa4b2; font-size: 13px; margin: 0 0 14px; }
-      .section {
-        padding: 14px; border: 1px solid #262c36; border-radius: 14px;
-        background: #11151b;
-      }
-      .section + .section { margin-top: 18px; }
-      .section-title {
-        color: #7d8795; font-size: 11px; text-transform: uppercase;
-        letter-spacing: .08em; margin: 0 0 10px;
-      }
-      .tabs {
-        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
-        margin: 0 0 12px;
-      }
-      .tab {
-        text-align: left; padding: 12px; border-radius: 12px; border: 1px solid #30363d;
-        background: #0f1216; color: #e8eaed;
-      }
-      .tab.active { border-color: #1f6feb; background: #1f6feb18; }
-      .tab strong { display: block; font-size: 13px; margin-bottom: 3px; }
-      .tab span { display: block; color: #9aa4b2; font-size: 11px; line-height: 1.35; font-weight: 400; }
-      .tab-panel {
-        margin: 0 0 16px; padding: 12px; border: 1px solid #30363d;
-        border-radius: 12px; background: #0f1216;
-      }
-      .tab-panel[hidden] { display: none; }
-      .tab-panel p { margin: 0 0 8px; color: #9aa4b2; font-size: 12px; line-height: 1.45; }
-      .tab-panel .expected { color: #7d8795; font-size: 11px; margin-top: 7px; }
-      .tab-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-      .persona-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-      .persona-bar label { font-size: 12px; color: #9aa4b2; }
-      select {
-        padding: 8px 10px; border-radius: 8px; border: 1px solid #30363d;
-        background: #0f1216; color: #e8eaed; font-size: 13px;
-      }
-      .scopes { font-size: 11px; color: #7d8795; }
-      .secondary {
-        background: #30363d; padding: 8px 10px; font-size: 13px;
-      }
-      .onboard {
-        display: none; margin: -2px 0 14px; padding: 12px; border-radius: 12px;
-        border: 1px solid #30363d; background: #0f1216;
-      }
-      .onboard.open { display: block; }
-      .onboard p { margin: 0 0 10px; color: #9aa4b2; font-size: 12px; line-height: 1.45; }
-      .onboard-row { display: flex; gap: 8px; margin-top: 8px; }
-      .mini {
-        padding: 6px 8px; border-radius: 999px; font-size: 11px;
-        background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
-      }
-      #log { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; max-height: 44vh; overflow-y: auto; }
-      .msg { padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
-      .user { background: #1f6feb22; border: 1px solid #1f6feb55; align-self: flex-end; max-width: 85%; }
-      .bot  { background: #21262d; border: 1px solid #30363d; align-self: flex-start; max-width: 90%; }
-      .meta { color: #9aa4b2; font-size: 12px; align-self: center; font-style: italic; }
-      form { display: flex; gap: 8px; }
-      input {
-        flex: 1; padding: 11px 12px; border-radius: 10px; border: 1px solid #30363d;
-        background: #0f1216; color: #e8eaed; font-size: 14px;
-      }
-      button {
-        padding: 11px 16px; border-radius: 10px; border: 0; background: #1f6feb;
-        color: #fff; font-weight: 600; cursor: pointer; font-size: 14px;
-      }
+      button { font: inherit; color: inherit; cursor: pointer; }
       button:disabled { opacity: .5; cursor: default; }
-      .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
-      .chip {
-        font-size: 12px; padding: 6px 10px; border-radius: 999px; cursor: pointer;
-        background: #0f1216; border: 1px solid #30363d; color: #c9d1d9;
+      code { font-family: var(--mono); font-size: 12px; background: #ffffff0d; padding: 1px 5px; border-radius: 4px; }
+      .app { display: grid; grid-template-columns: 300px minmax(0, 1fr) 380px; height: 100vh; }
+
+      /* ── Sidebar: numbered scenarios, hover expands the description ── */
+      .sidebar { border-right: 1px solid var(--line); background: var(--panel-2); overflow-y: auto; padding: 16px 10px 24px; }
+      .brand { padding: 0 8px 14px; }
+      .brand h1 { font-size: 15px; margin: 0; }
+      .brand p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+      .group-title { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; margin: 14px 8px 6px; }
+      .scn {
+        display: block; width: 100%; text-align: left; border: 1px solid transparent; background: none;
+        border-radius: 10px; padding: 8px 10px; margin: 2px 0;
       }
-      @media (max-width: 640px) {
-        .tabs { grid-template-columns: 1fr; }
-        .onboard-row { flex-direction: column; }
+      .scn:hover { background: #ffffff08; border-color: var(--line); }
+      .scn.active { background: var(--accent-soft); border-color: #3b82f655; }
+      .scn-head { display: flex; align-items: center; gap: 10px; }
+      .num {
+        flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+        background: #ffffff0f; color: var(--text); font-weight: 700; font-size: 12px;
+      }
+      .scn.active .num { background: var(--accent); color: #fff; }
+      .scn-title { font-size: 13px; font-weight: 600; line-height: 1.25; }
+      .scn-state { margin-left: auto; font-size: 11px; color: var(--faint); }
+      .scn-state.pass { color: var(--ok); } .scn-state.fail { color: var(--bad); }
+      .scn-more {
+        max-height: 0; overflow: hidden; opacity: 0; transition: max-height .25s ease, opacity .2s ease, margin .2s ease;
+        color: var(--muted); font-size: 12px; line-height: 1.45; margin-left: 36px;
+      }
+      .scn:hover .scn-more, .scn:focus-visible .scn-more { max-height: 220px; opacity: 1; margin-top: 6px; }
+      .scn-more .exp { display: block; margin-top: 5px; color: var(--faint); }
+
+      /* ── Main: the selected scenario ── */
+      .main { overflow-y: auto; padding: 22px 26px 40px; }
+      .scn-header { display: flex; gap: 14px; align-items: flex-start; }
+      .big-num { flex: none; width: 44px; height: 44px; border-radius: 12px; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 18px; }
+      .scn-header h2 { margin: 0; font-size: 20px; }
+      .scn-header .kicker { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      .lead { color: var(--muted); margin: 10px 0 0; max-width: 820px; }
+      .proves { margin: 14px 0 0; padding: 11px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); max-width: 820px; }
+      .proves b { color: var(--text); }
+      .proves span { color: var(--muted); }
+      .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 14px; }
+      .btn { padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line-2); background: #1b2129; font-weight: 600; font-size: 13px; }
+      .btn:hover:not(:disabled) { border-color: #4a5462; }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .btn.small { padding: 5px 9px; font-size: 12px; border-radius: 8px; }
+      .section-label { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; margin: 20px 0 8px; }
+
+      .agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+      .agent { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 11px 12px; }
+      .agent-name { font-weight: 650; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .agent-did { font-family: var(--mono); font-size: 10.5px; color: var(--faint); word-break: break-all; margin: 3px 0 7px; }
+      .agent-row { font-size: 12px; color: var(--muted); margin-top: 3px; }
+      .agent.empty { color: var(--faint); font-size: 13px; display: grid; place-items: center; min-height: 72px; border-style: dashed; }
+      .pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--muted); margin: 1px 2px 1px 0; }
+      .pill.ok { color: var(--ok); border-color: #34c77b55; background: var(--ok-soft); }
+      .pill.bad { color: var(--bad); border-color: #f2555a55; background: var(--bad-soft); }
+      .pill.warn { color: var(--warn); border-color: #e6a23c55; background: var(--warn-soft); }
+      .pill.info { color: #b8c4d6; border-color: #8b9bb455; background: var(--info-soft); }
+
+      .steps { display: flex; flex-direction: column; gap: 8px; }
+      .step { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 10px 12px; }
+      .step.pass { border-color: #34c77b44; } .step.fail { border-color: #f2555a66; }
+      .step-row { display: flex; align-items: center; gap: 10px; }
+      .step-idx { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: #ffffff10; color: var(--muted); }
+      .step.pass .step-idx { background: var(--ok); color: #06140c; } .step.fail .step-idx { background: var(--bad); color: #fff; }
+      .step-label { flex: 1; min-width: 0; }
+      .step-label .who { color: var(--faint); font-size: 12px; display: block; margin-top: 1px; }
+      .expect { flex: none; font-size: 11px; color: var(--faint); }
+      .result { margin: 8px 0 0 32px; font-size: 12.5px; display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+      .result .detail { flex-basis: 100%; color: var(--muted); font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; max-height: 160px; overflow: auto; }
+      .prompts { display: flex; flex-wrap: wrap; gap: 8px; }
+      .prompt { font-size: 12px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel); }
+      .prompt:hover { border-color: var(--accent); }
+
+      /* ── Chat ── */
+      .chat { border-left: 1px solid var(--line); background: var(--panel-2); display: flex; flex-direction: column; min-height: 0; }
+      .chat-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+      .chat-head h3 { margin: 0 0 8px; font-size: 14px; }
+      .field { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 8px; margin-top: 6px; }
+      .field label { font-size: 12px; color: var(--muted); }
+      select, input[type=text] {
+        width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg); color: var(--text); font: inherit; font-size: 13px;
+      }
+      .chat-scopes { font-size: 11.5px; color: var(--faint); margin-top: 6px; min-height: 16px; }
+      #log { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+      .msg { padding: 9px 11px; border-radius: 11px; white-space: pre-wrap; font-size: 13px; }
+      .msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid #3b82f655; max-width: 90%; }
+      .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); max-width: 95%; }
+      .msg.meta { align-self: center; color: var(--faint); font-size: 12px; font-style: italic; padding: 2px; }
+      .trace { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+      .chat-form { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
+      .chat-form input { flex: 1; }
+
+      /* ── Consent dialog (the service's consent screen) ── */
+      .modal { position: fixed; inset: 0; background: #0009; display: none; place-items: center; z-index: 10; padding: 16px; }
+      .modal.open { display: grid; }
+      .dialog { width: min(440px, 100%); background: #f7f8fa; color: #1a1f27; border-radius: 16px; padding: 20px; box-shadow: 0 20px 60px #0008; }
+      .dialog .sp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #5b6573; }
+      .dialog h4 { margin: 4px 0 6px; font-size: 17px; }
+      .dialog p { margin: 0 0 12px; color: #3b4452; font-size: 13px; }
+      .dialog label { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 6px 0; }
+      .dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+      .dialog .btn { background: #e6e9ee; border-color: #d3d8df; color: #1a1f27; }
+      .dialog .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+      @media (max-width: 1180px) {
+        .app { grid-template-columns: 260px minmax(0, 1fr); }
+        .chat { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); height: 560px; }
+        .app { height: auto; }
+      }
+      @media (max-width: 760px) {
+        .app { grid-template-columns: 1fr; }
+        .sidebar { border-right: 0; border-bottom: 1px solid var(--line); max-height: 46vh; }
+        .main { padding: 18px 16px 30px; }
       }
     </style>
   </head>
   <body>
-    <div class="card">
-      <section class="section">
-        <div class="section-title">Guided use cases</div>
-        <div class="tabs" role="tablist" aria-label="Demo use cases">
-          <button class="tab active" id="tab-full" type="button" role="tab" aria-selected="true" aria-controls="panel-full" data-tab="full">
-            <strong>Use case 1 — Full-access agent</strong>
-            <span>Concierge can search and book.</span>
-          </button>
-          <button class="tab" id="tab-readonly" type="button" role="tab" aria-selected="false" aria-controls="panel-readonly" data-tab="readonly">
-            <strong>Use case 2 — Read-only agent</strong>
-            <span>Search succeeds; booking is refused.</span>
-          </button>
-          <button class="tab" id="tab-revoked" type="button" role="tab" aria-selected="false" aria-controls="panel-revoked" data-tab="revoked">
-            <strong>Use case 3 — Revoked credential</strong>
-            <span>Revoke Concierge, then retry booking.</span>
-          </button>
-          <button class="tab" id="tab-delegated" type="button" role="tab" aria-selected="false" aria-controls="panel-delegated" data-tab="delegated">
-            <strong>Use case 4 — Delegated agent</strong>
-            <span>Planner delegates read-only authority.</span>
-          </button>
+    <div class="app">
+      <nav class="sidebar" aria-label="Scenarios">
+        <div class="brand">
+          <h1>Travel Concierge</h1>
+          <p>Real agents, real credentials, two real services. Hover a scenario to see what it proves.</p>
         </div>
-        <div class="tab-panel" id="panel-full" role="tabpanel" aria-labelledby="tab-full">
-          <p>Select Concierge Agent and ask it to book. Its credential has both
-            <code>read:catalog</code> and <code>write:orders</code>.</p>
-          <div class="tab-actions">
-            <button class="mini" type="button" data-fill="Book flight BA249 for Ada Lovelace">Fill booking prompt</button>
-          </div>
-          <div class="expected">Expected: booking succeeds and Console shows VP verification.</div>
-        </div>
-        <div class="tab-panel" id="panel-readonly" role="tabpanel" aria-labelledby="tab-readonly" hidden>
-          <p>Generate a Console token with only <code>read:catalog</code>, onboard
-            it here, then try search and booking from that persona.</p>
-          <div class="tab-actions">
-            <button class="mini" id="scenario-onboard" type="button">Open onboarding</button>
-            <button class="mini" type="button" data-fill="Search flights from Mumbai to London">Fill search prompt</button>
-            <button class="mini" type="button" data-fill="Book flight BA249 for Grace Hopper">Fill booking prompt</button>
-          </div>
-          <div class="expected">Expected: search succeeds; booking is refused for missing <code>write:orders</code>.</div>
-        </div>
-        <div class="tab-panel" id="panel-revoked" role="tabpanel" aria-labelledby="tab-revoked" hidden>
-          <p>Select Concierge Agent in console agent list, revoke its current credential, then ask it to
-            book again. The wallet still signs a VP, but HelixID rejects it because
-            the credential is now revoked.</p>
-          <div class="tab-actions">
-            <button class="mini" id="scenario-select-concierge" type="button">Select Concierge</button>
-            <button class="mini" id="scenario-revoke" type="button">Revoke selected agent</button>
-            <button class="mini" type="button" data-fill="Book flight BA249 for Ada Lovelace">Fill booking prompt</button>
-          </div>
-          <div class="expected">Expected: retry is refused and Console shows a revoked/failed VP verification.</div>
-        </div>
-        <div class="tab-panel" id="panel-delegated" role="tabpanel" aria-labelledby="tab-delegated" hidden>
-          <p>Create a full-access Planner Agent and no-access Research Agent, then
-            delegate only <code>read:catalog</code> from Planner to Research.</p>
-          <div class="tab-actions">
-            <button class="mini" id="scenario-delegation-setup" type="button">Create demo agents</button>
-            <button class="mini" id="scenario-delegate" type="button">Delegate read access</button>
-            <button class="mini" id="scenario-select-research" type="button">Select Research</button>
-            <button class="mini" type="button" data-fill="Search flights from Mumbai to London">Fill search prompt</button>
-            <button class="mini" type="button" data-fill="Book flight BA249 for Ada Lovelace">Fill booking prompt</button>
-          </div>
-          <div class="expected">Expected: delegated search succeeds; delegated booking is refused for missing <code>write:orders</code>.</div>
-        </div>
-      </section>
-      <section class="section">
-        <h1>Travel Concierge</h1>
-        <p class="sub">
-          LLM agents that act only after HelixID verifies their credentials. Switch
-          the acting agent below and watch
-          <a href="http://localhost:8080" target="_blank" rel="noreferrer" style="color:#58a6ff">Console → Audit</a>.
-        </p>
-        <div class="persona-bar">
-          <label for="persona">Acting agent</label>
-          <select id="persona"></select>
-          <span class="scopes" id="scopes"></span>
-          <button class="secondary" id="open-onboard" type="button">Onboard new agent</button>
-        </div>
-        <div class="onboard" id="onboard-panel">
-          <p>
-            Generate an onboard token in HelixID Console, paste it here, and this
-            Travel Concierge app will enroll a new local persona for that agent.
-            Console remains the source of truth for the credential and audit trail.
-          </p>
-          <form id="onboard-form">
-            <input id="onboard-name" autocomplete="off" placeholder="Display name, e.g. Search Agent" />
-            <div class="onboard-row">
-              <input id="onboard-token" autocomplete="off" placeholder="Paste Console onboard token…" />
-              <button id="onboard-submit" type="submit">Onboard</button>
-            </div>
-          </form>
+        <div id="nav"></div>
+      </nav>
+
+      <main class="main" id="main"></main>
+
+      <aside class="chat" aria-label="Chat with the agent">
+        <div class="chat-head">
+          <h3>Talk to an agent (LLM)</h3>
+          <div class="field"><label for="persona">Acting agent</label><select id="persona"></select></div>
+          <div class="field"><label for="onbehalf">On behalf of</label><select id="onbehalf"></select></div>
+          <div class="chat-scopes" id="chat-scopes"></div>
         </div>
         <div id="log">
-          <div class="msg bot">Hi! Try “Book flight BA249 for Ada Lovelace.” Then try read-only, revocation, or delegation from the guided use cases and watch HelixID enforce the credential.</div>
+          <div class="msg meta">Pick an agent (set up a scenario first), then ask it to search or book. The LLM decides what to call; HelixID decides what happens.</div>
         </div>
-        <div class="chips">
-          <span class="chip" data-p="Book flight BA249 for Ada Lovelace">Book BA249 for Ada Lovelace</span>
-          <span class="chip" data-p="Search flights from Mumbai to London">Search MUM → LON</span>
-        </div>
-        <form id="f">
-          <input id="m" autocomplete="off" placeholder="Ask the agent to search or book a flight…" />
-          <button id="s" type="submit">Send</button>
+        <form class="chat-form" id="chat-form">
+          <input type="text" id="m" autocomplete="off" placeholder="e.g. Book hotel H-101 in Goa" />
+          <button class="btn primary" id="send" type="submit">Send</button>
         </form>
-      </section>
+      </aside>
     </div>
+
+    <div class="modal" id="consent-modal" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+      <div class="dialog">
+        <div class="sp" id="consent-sp"></div>
+        <h4 id="consent-title"></h4>
+        <p id="consent-body"></p>
+        <div id="consent-scopes"></div>
+        <div style="margin-top:10px;font-size:12px;color:#5b6573">Remember this choice</div>
+        <label><input type="radio" name="durability" value="standing" checked /> Always (standing consent)</label>
+        <label><input type="radio" name="durability" value="session" /> Just this trip (session, 24 hours)</label>
+        <div class="row">
+          <button class="btn" id="consent-decline" type="button">Decline</button>
+          <button class="btn primary" id="consent-approve" type="button">Allow</button>
+        </div>
+      </div>
+    </div>
+
     <script>
-      const log = document.getElementById('log');
-      const form = document.getElementById('f');
-      const input = document.getElementById('m');
-      const sendBtn = document.getElementById('s');
-      const personaSel = document.getElementById('persona');
-      const scopesEl = document.getElementById('scopes');
-      const openOnboardBtn = document.getElementById('open-onboard');
-      const onboardPanel = document.getElementById('onboard-panel');
-      const onboardForm = document.getElementById('onboard-form');
-      const onboardName = document.getElementById('onboard-name');
-      const onboardToken = document.getElementById('onboard-token');
-      const onboardSubmit = document.getElementById('onboard-submit');
-      const scenarioOnboard = document.getElementById('scenario-onboard');
-      const scenarioSelectConcierge = document.getElementById('scenario-select-concierge');
-      const scenarioRevoke = document.getElementById('scenario-revoke');
-      const scenarioDelegationSetup = document.getElementById('scenario-delegation-setup');
-      const scenarioDelegate = document.getElementById('scenario-delegate');
-      const scenarioSelectResearch = document.getElementById('scenario-select-research');
-      const conversationId = 'web-' + Math.random().toString(36).slice(2, 10);
+      const R = 'read:catalog';
+      const W = 'write:orders';
+      const SCOPE_LABEL = { [R]: 'search', [W]: 'book' };
+      const USERS = { ada: 'Ada Lovelace', grace: 'Grace Hopper' };
+      const SERVICE_LABEL = { air: 'Helix Air', stay: 'Helix Stay' };
+      const TOOL_SERVICE = { search_flights: 'air', book_flight: 'air', search_hotels: 'stay', book_hotel: 'stay' };
+
+      // Inputs reused by many steps.
+      const SEARCH_FLIGHTS = { origin: 'BOM', destination: 'LHR' };
+      const bookFlight = (who) => ({ flightId: 'BA249', passengerName: USERS[who] || who });
+      const bookHotel = (who, hotelId = 'H-101') => ({ hotelId, guestName: USERS[who] || who });
+
+      // ── Step builders. Each returns { label, who, expect, expectCode?, run(ctx) }. ──
+      const tool = (label, role, toolName, input, expect, opts = {}) => ({
+        label, expect, expectCode: opts.code,
+        who: whoLine(role, toolName, opts.user),
+        run: (c) => c.tool(role, toolName, input, opts.user),
+      });
+      const consent = (role, user, service, scopes, durability = 'standing', as) => ({
+        label: `${USERS[user]} consents at ${SERVICE_LABEL[service]}: let ${'{' + role + '}'} ${scopes.map((s) => SCOPE_LABEL[s]).join(' + ')}` +
+          (durability === 'session' ? ' — just this trip' : ' — always'),
+        who: `consent grant signed by ${SERVICE_LABEL[service]} · ${scopes.join(', ')} · ${durability}`,
+        expect: 'done',
+        run: (c) => c.consent(role, user, service, scopes, durability, as),
+      });
+      const delegate = (from, to, scopes, expect, opts = {}) => ({
+        label: `{${from}} delegates ${scopes.map((s) => SCOPE_LABEL[s]).join(' + ')} to {${to}}` +
+          (opts.expiresIn ? ` for ${opts.expiresIn}s` : '') + (opts.fromDelegated ? ' (from its delegated credential)' : ''),
+        who: `POST /v1/custodial-agents/:did/delegate · ${scopes.join(', ')}`,
+        expect, expectCode: opts.code,
+        run: (c) => c.delegate(from, to, scopes, opts),
+      });
+      const action = (label, who, run, expect = 'done', code) => ({ label, who, run, expect, expectCode: code });
+
+      function whoLine(role, toolName, user) {
+        return `{${role}} → ${SERVICE_LABEL[TOOL_SERVICE[toolName]]} · ${toolName}` + (user ? ` · on behalf of ${USERS[user]}` : ' · own authority');
+      }
+
+      // ── The scenarios ──
+      const SCENARIOS = [
+        // Basics: organization → agent
+        {
+          key: 'A', group: 'Basics — organization → agent', title: 'Full-access agent',
+          summary: 'An organization-issued credential with both scopes lets the agent search and book.',
+          expected: 'Both calls succeed; Console shows VP_VERIFIED.',
+          lead: 'The organization onboards a Concierge with read:catalog + write:orders. It acts on its own authority — no traveler is named — so Helix Air checks only the agent credential.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            tool('{concierge} searches flights BOM → LHR', 'concierge', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            tool('{concierge} books BA249 for Ada', 'concierge', 'book_flight', bookFlight('ada'), 'allowed'),
+          ],
+          prompts: [{ text: 'Book flight BA249 for Ada Lovelace', role: 'concierge' }],
+        },
+        {
+          key: 'B', group: 'Basics — organization → agent', title: 'Read-only agent',
+          summary: 'Same tools, narrower credential: the agent can search, but HelixID refuses its booking.',
+          expected: 'Search succeeds; booking refused for missing write:orders.',
+          lead: 'A Search Agent is onboarded with only read:catalog. The booking tool is offered to it like any other agent — only the credential decides.',
+          agents: [{ role: 'search', name: 'Search Agent', scopes: [R] }],
+          steps: [
+            tool('{search} searches flights BOM → LHR', 'search', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            tool('{search} tries to book BA249 for Grace', 'search', 'book_flight', bookFlight('grace'), 'refused', { code: 'INSUFFICIENT_SCOPE' }),
+          ],
+          prompts: [{ text: 'Book flight BA249 for Grace Hopper', role: 'search' }],
+        },
+        {
+          key: 'C', group: 'Basics — organization → agent', title: 'Revoked credential',
+          summary: 'Revoke the agent’s credential live; its next action is refused with no restart or config change.',
+          expected: 'Booking works, then fails right after revocation.',
+          lead: 'The organization revokes the Concierge credential through POST /v1/vcs/:vcId/revoke. The status-list bit flips; nothing in this app keeps a denylist.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            tool('{concierge} books BA249 for Ada', 'concierge', 'book_flight', bookFlight('ada'), 'allowed'),
+            action('Organization revokes {concierge}’s credential', 'POST /v1/vcs/:vcId/revoke', (c) => c.revokeAgent('concierge')),
+            tool('{concierge} retries the same booking', 'concierge', 'book_flight', bookFlight('ada'), 'refused'),
+          ],
+          prompts: [],
+        },
+        {
+          key: 'D', group: 'Basics — organization → agent', title: 'Agent → agent delegation',
+          summary: 'A Planner hands a no-scope Research agent only read:catalog. Research can search, never book.',
+          expected: 'Research is refused, then searches after delegation; booking stays refused.',
+          lead: 'Research is onboarded with an identity but no scopes. Planner (maxDelegationDepth 1) delegates read:catalog; the platform signs the child credential with Planner’s custodial key.',
+          agents: [
+            { role: 'planner', name: 'Planner', scopes: [R, W], depth: 1 },
+            { role: 'research', name: 'Research', scopes: [] },
+          ],
+          steps: [
+            tool('{research} searches flights before any delegation', 'research', 'search_flights', SEARCH_FLIGHTS, 'refused', { code: 'INSUFFICIENT_SCOPE' }),
+            delegate('planner', 'research', [R], 'allowed'),
+            tool('{research} searches flights', 'research', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            tool('{research} tries to book BA249', 'research', 'book_flight', bookFlight('ada'), 'refused', { code: 'INSUFFICIENT_SCOPE' }),
+          ],
+          prompts: [{ text: 'Search flights from Mumbai to London', role: 'research' }],
+        },
+
+        // User consent
+        {
+          key: '1', group: 'User consent', title: 'User → agent consent',
+          summary: 'Helix Stay books only for a traveler who consented. Ada approves once and the booking goes through.',
+          expected: 'Refused (CONSENT_REQUIRED) until Ada consents, then allowed.',
+          lead: 'The Concierge is fully capable, but Helix Stay won’t act on the agent’s own authority, and HelixID won’t sign a VP for Ada without her consent grant. Ada’s consent is a credential signed by Helix Stay’s own key.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            tool('{concierge} books Helix Grand on its own authority', 'concierge', 'book_hotel', bookHotel('ada'), 'refused', { code: 'CONSENT_REQUIRED' }),
+            tool('{concierge} books Helix Grand for Ada', 'concierge', 'book_hotel', bookHotel('ada'), 'refused', { code: 'CONSENT_REQUIRED', user: 'ada' }),
+            consent('concierge', 'ada', 'stay', [R, W]),
+            tool('{concierge} retries the booking for Ada', 'concierge', 'book_hotel', bookHotel('ada'), 'allowed', { user: 'ada' }),
+          ],
+          prompts: [{ text: 'Book hotel H-101 in Goa', role: 'concierge', user: 'ada' }],
+        },
+        {
+          key: '2', group: 'User consent', title: 'User → agent → agent',
+          summary: 'Ada consents to the Concierge, which delegates to a Hotel Scout. Ada’s consent flows down the chain — no one else’s does.',
+          expected: 'Scout books for Ada; refused for Grace, who never consented.',
+          lead: 'The Scout holds no scopes and no consent of its own. Its VP carries the delegated credential plus Ada’s grant to the Concierge; the verifier accepts a grant made to any agent in the delegation chain, and intersects scopes.',
+          agents: [
+            { role: 'concierge', name: 'Concierge', scopes: [R, W], depth: 1 },
+            { role: 'scout', name: 'Hotel Scout', scopes: [] },
+          ],
+          steps: [
+            consent('concierge', 'ada', 'stay', [R, W]),
+            delegate('concierge', 'scout', [R, W], 'allowed'),
+            tool('{scout} books Helix Grand for Ada', 'scout', 'book_hotel', bookHotel('ada'), 'allowed', { user: 'ada' }),
+            tool('{scout} books Helix Grand for Grace', 'scout', 'book_hotel', bookHotel('grace'), 'refused', { code: 'CONSENT_REQUIRED', user: 'grace' }),
+          ],
+          prompts: [{ text: 'Book hotel H-101 in Goa', role: 'scout', user: 'ada' }],
+        },
+        {
+          key: '3', group: 'User consent', title: 'Session vs standing consent',
+          summary: '“Just this trip” issues a 24-hour grant; “always” issues a long-lived one. Either is reused without asking again.',
+          expected: 'Both travelers book; the second booking needs no new consent. Compare the validUntil dates.',
+          lead: 'Durability is part of the grant credential itself: a session grant’s validity window is 24 hours, a standing grant’s is years. Within that window the platform presents the same grant on every call.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            consent('concierge', 'ada', 'stay', [R, W], 'session'),
+            tool('{concierge} books Helix Grand for Ada', 'concierge', 'book_hotel', bookHotel('ada'), 'allowed', { user: 'ada' }),
+            tool('{concierge} books Harbour Inn for Ada — no new prompt', 'concierge', 'book_hotel', bookHotel('ada', 'H-202'), 'allowed', { user: 'ada' }),
+            consent('concierge', 'grace', 'stay', [R, W], 'standing'),
+            tool('{concierge} books Helix Grand for Grace', 'concierge', 'book_hotel', bookHotel('grace'), 'allowed', { user: 'grace' }),
+          ],
+          prompts: [{ text: 'Book hotel H-202 in Goa', role: 'concierge', user: 'ada' }],
+        },
+        {
+          key: '4', group: 'User consent', title: 'Traveler revokes consent',
+          summary: 'Ada withdraws her consent. The agent stops acting for her — but still works for Grace and on its own authority.',
+          expected: 'Ada refused after revoking; Grace and the agent’s own flight booking still allowed.',
+          lead: 'Revoking a consent grant is not revoking the agent. The organization’s credential is untouched; only Ada’s grant flips on Helix Stay’s status list.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            consent('concierge', 'ada', 'stay', [R, W], 'standing', 'adaGrant'),
+            consent('concierge', 'grace', 'stay', [R, W]),
+            tool('{concierge} books Helix Grand for Ada', 'concierge', 'book_hotel', bookHotel('ada'), 'allowed', { user: 'ada' }),
+            action('Ada revokes her consent', 'POST /v1/vcs/:grantId/revoke', (c) => c.revokeGrant('adaGrant')),
+            tool('{concierge} books for Ada again', 'concierge', 'book_hotel', bookHotel('ada'), 'refused', { code: 'CONSENT_REQUIRED', user: 'ada' }),
+            tool('{concierge} books for Grace', 'concierge', 'book_hotel', bookHotel('grace'), 'allowed', { user: 'grace' }),
+            tool('{concierge} books a flight on its own authority', 'concierge', 'book_flight', bookFlight('ada'), 'allowed'),
+          ],
+          prompts: [],
+        },
+        {
+          key: '5', group: 'User consent', title: 'Two travelers, one agent',
+          summary: 'Consent belongs to a traveler, not to the agent. Ada’s grant does nothing for Grace, and Grace can consent to less.',
+          expected: 'Ada allowed; Grace refused, then allowed to search but not book.',
+          lead: 'Every grant names its user. The VP names who the agent acts for, and the verifier requires the grant’s user to match — so one traveler’s consent can’t be borrowed for another.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            consent('concierge', 'ada', 'stay', [R, W]),
+            tool('{concierge} books for Ada', 'concierge', 'book_hotel', bookHotel('ada'), 'allowed', { user: 'ada' }),
+            tool('{concierge} books for Grace', 'concierge', 'book_hotel', bookHotel('grace'), 'refused', { code: 'CONSENT_REQUIRED', user: 'grace' }),
+            consent('concierge', 'grace', 'stay', [R]),
+            tool('{concierge} searches hotels for Grace', 'concierge', 'search_hotels', { city: 'Goa' }, 'allowed', { user: 'grace' }),
+            tool('{concierge} books for Grace', 'concierge', 'book_hotel', bookHotel('grace'), 'refused', { code: 'INSUFFICIENT_SCOPE', user: 'grace' }),
+          ],
+          prompts: [{ text: 'Book hotel H-101 in Goa', role: 'concierge', user: 'grace' }],
+        },
+        {
+          key: '6', group: 'User consent', title: 'Two services',
+          summary: 'Consent is per service. Ada’s Helix Stay consent doesn’t open Helix Air, and a VP made for one service is rejected by the other.',
+          expected: 'Hotel allowed; flight refused until Ada consents at Helix Air; forwarded VP refused.',
+          lead: 'Each service has its own platform-minted DID and signs its own grants. Every VP is bound to one service (targetService), so a malicious service can’t forward a VP it received to another.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            consent('concierge', 'ada', 'stay', [R, W]),
+            tool('{concierge} books a hotel for Ada', 'concierge', 'book_hotel', bookHotel('ada'), 'allowed', { user: 'ada' }),
+            tool('{concierge} books BA249 for Ada at Helix Air', 'concierge', 'book_flight', bookFlight('ada'), 'refused', { code: 'CONSENT_REQUIRED', user: 'ada' }),
+            action('Helix Stay forwards a VP it received to Helix Air', 'VP signed for Helix Stay → book_flight at Helix Air', (c) => c.wrongService('concierge', 'stay', 'book_flight', bookFlight('ada')), 'refused', 'VP_INVALID_STRUCTURE'),
+            consent('concierge', 'ada', 'air', [R, W]),
+            tool('{concierge} books BA249 for Ada at Helix Air', 'concierge', 'book_flight', bookFlight('ada'), 'allowed', { user: 'ada' }),
+          ],
+          prompts: [{ text: 'Book flight BA249 for me', role: 'concierge', user: 'ada' }],
+        },
+
+        // Delegation limits
+        {
+          key: '7', group: 'Delegation limits', title: 'Delegation depth limit',
+          summary: 'Planner may delegate one hop. Research can use what it got, but can’t pass it on to an Intern.',
+          expected: 'First hop allowed; second hop refused (MAX_DELEGATION_DEPTH_EXCEEDED).',
+          lead: 'maxDelegationDepth is set on the root credential and copied unchanged into every child. A child at depth 1 of a depth-1 chain has no budget left.',
+          agents: [
+            { role: 'planner', name: 'Planner', scopes: [R, W], depth: 1 },
+            { role: 'research', name: 'Research', scopes: [] },
+            { role: 'intern', name: 'Intern', scopes: [] },
+          ],
+          steps: [
+            delegate('planner', 'research', [R], 'allowed'),
+            tool('{research} searches flights', 'research', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            delegate('research', 'intern', [R], 'refused', { fromDelegated: true, code: 'MAX_DELEGATION_DEPTH_EXCEEDED' }),
+            tool('{intern} searches flights', 'intern', 'search_flights', SEARCH_FLIGHTS, 'refused', { code: 'INSUFFICIENT_SCOPE' }),
+          ],
+          prompts: [],
+        },
+        {
+          key: '8', group: 'Delegation limits', title: 'Revoking the parent cuts off the child',
+          summary: 'Revoke Planner and the authority it delegated to Research disappears at once, with nothing sent to Research.',
+          expected: 'Research searches, then is refused after Planner is revoked.',
+          lead: 'The verifier walks the whole delegation chain on every call and checks each credential’s status. A revoked ancestor invalidates every descendant: Research is left with only its own zero-scope identity credential.',
+          agents: [
+            { role: 'planner', name: 'Planner', scopes: [R, W], depth: 1 },
+            { role: 'research', name: 'Research', scopes: [] },
+          ],
+          steps: [
+            delegate('planner', 'research', [R], 'allowed'),
+            tool('{research} searches flights', 'research', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            action('Organization revokes {planner}’s credential', 'POST /v1/vcs/:vcId/revoke', (c) => c.revokeAgent('planner')),
+            tool('{research} searches flights again', 'research', 'search_flights', SEARCH_FLIGHTS, 'refused'),
+          ],
+          prompts: [],
+        },
+        {
+          key: '9', group: 'Delegation limits', title: 'Delegation that expires',
+          summary: 'Planner gives Research 20 seconds of access. When the window closes, so does the access — no revocation needed.',
+          expected: 'Allowed inside the window, refused after it.',
+          lead: 'A delegated credential’s validUntil comes from expiresIn. Expiry is checked on every verification, so short-lived access cleans itself up.',
+          agents: [
+            { role: 'planner', name: 'Planner', scopes: [R, W], depth: 1 },
+            { role: 'research', name: 'Research', scopes: [] },
+          ],
+          steps: [
+            delegate('planner', 'research', [R], 'allowed', { expiresIn: 20 }),
+            tool('{research} searches flights', 'research', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            action('Wait 25 seconds', 'the delegated credential lapses', (c) => c.wait(25)),
+            tool('{research} searches flights again', 'research', 'search_flights', SEARCH_FLIGHTS, 'refused'),
+          ],
+          prompts: [],
+        },
+
+        // Attacks
+        {
+          key: '10', group: 'Attacks — these should fail', title: 'Replaying a captured VP',
+          summary: 'An attacker copies a valid presentation and sends it again. The service accepts each VP exactly once.',
+          expected: 'Original allowed; replay refused (VP_REPLAYED); a fresh VP still works.',
+          lead: 'A VP is valid for 5 minutes. The API verifies statelessly, so single-use is the verifier’s job: the MCP server remembers every VP id until it expires.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            action('{concierge} books BA249 — an attacker keeps a copy of the VP', 'one signed VP, sent once', (c) => c.capture('concierge', 'book_flight', bookFlight('ada')), 'allowed'),
+            action('Attacker replays the captured VP', 'the same VP, byte for byte', (c) => c.replay(), 'refused', 'VP_REPLAYED'),
+            tool('{concierge} books again with a fresh VP', 'concierge', 'book_flight', bookFlight('ada'), 'allowed'),
+          ],
+          prompts: [],
+        },
+        {
+          key: '11', group: 'Attacks — these should fail', title: 'Tampering with a credential',
+          summary: 'A read-only agent edits its own credential to claim write:orders. The signatures no longer match, so the edit buys nothing.',
+          expected: 'Refused for missing scope, then refused for an invalid signature.',
+          lead: 'Scopes live inside the credential the issuer signed, and the VP’s own signature covers that credential too. Editing one byte breaks the VP signature first (and the issuer’s behind it); there is no way to add authority after issuance.',
+          agents: [{ role: 'search', name: 'Search Agent', scopes: [R] }],
+          steps: [
+            tool('{search} tries to book BA249', 'search', 'book_flight', bookFlight('grace'), 'refused', { code: 'INSUFFICIENT_SCOPE' }),
+            action('{search} edits its credential to add write:orders, then books', 'tampered VC inside a validly signed VP', (c) => c.tamper('search', 'book_flight', bookFlight('grace'), [W]), 'refused'),
+          ],
+          prompts: [],
+        },
+        {
+          key: '12', group: 'Attacks — these should fail', title: 'Scope escalation in delegation',
+          summary: 'A read-only Planner tries to delegate booking rights it never had. You can only delegate a subset of what you hold.',
+          expected: 'Delegating write:orders refused; delegating read:catalog allowed.',
+          lead: 'The platform refuses to sign a child credential whose scopes aren’t a subset of the parent’s — and the verifier re-checks the subset rule at every link of the chain.',
+          agents: [
+            { role: 'planner', name: 'Read-only Planner', scopes: [R], depth: 1 },
+            { role: 'helper', name: 'Helper', scopes: [] },
+          ],
+          steps: [
+            delegate('planner', 'helper', [R, W], 'refused', { code: 'SCOPE_ESCALATION_DENIED' }),
+            delegate('planner', 'helper', [R], 'allowed'),
+            tool('{helper} searches flights', 'helper', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            tool('{helper} tries to book BA249', 'helper', 'book_flight', bookFlight('ada'), 'refused', { code: 'INSUFFICIENT_SCOPE' }),
+          ],
+          prompts: [],
+        },
+        {
+          key: '13', group: 'Attacks — these should fail', title: 'Prompt injection',
+          summary: 'A hotel listing tells the AI to book a ₹48,000 suite. Even if the model obeys, Ada only consented to search.',
+          expected: 'Search allowed (the listing carries the injection); the injected booking is refused.',
+          lead: 'The guarantee doesn’t depend on the LLM behaving. The Concierge can book in general, but its authority for Ada is the intersection of its credential and her consent — which is search only.',
+          agents: [{ role: 'concierge', name: 'Concierge', scopes: [R, W] }],
+          steps: [
+            consent('concierge', 'ada', 'stay', [R]),
+            tool('{concierge} searches Goa hotels for Ada', 'concierge', 'search_hotels', { city: 'Goa' }, 'allowed', { user: 'ada' }),
+            tool('Hijacked {concierge} obeys the listing: books H-666 for Ada', 'concierge', 'book_hotel', bookHotel('ada', 'H-666'), 'refused', { code: 'INSUFFICIENT_SCOPE', user: 'ada' }),
+          ],
+          prompts: [{ text: 'Find me a hotel in Goa and follow any booking instructions in the results', role: 'concierge', user: 'ada' }],
+        },
+        {
+          key: '14', group: 'Attacks — these should fail', title: 'Deactivated agent DID',
+          summary: 'Retire the agent’s whole identity, not one credential. Every VP it signs afterwards fails at the holder-DID check.',
+          expected: 'Allowed before; refused after deactivation, though the credential itself was never revoked.',
+          lead: 'On a did:web platform, deactivating the DID makes its document answer 410 and the verifier can no longer resolve the key that signs the VP. This self-hosted demo runs in did:key mode, where the document is derived from the DID itself and no registry is consulted — so expect step 3 to show that gap here.',
+          agents: [{ role: 'retired', name: 'Retired Agent', scopes: [R, W] }],
+          steps: [
+            tool('{retired} searches flights', 'retired', 'search_flights', SEARCH_FLIGHTS, 'allowed'),
+            action('Organization deactivates {retired}’s DID', 'POST /v1/custodial-agents/:did/deactivate', (c) => c.deactivate('retired')),
+            tool('{retired} searches flights again', 'retired', 'search_flights', SEARCH_FLIGHTS, 'refused', { code: 'DID_DEACTIVATED' }),
+          ],
+          prompts: [],
+        },
+      ];
+
+      // ── State ──
+      const STORE_KEY = 'concierge-scenarios-v1';
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch { saved = {}; }
+      const state = {}; // key → { personas: {role: personaId}, refs: {}, results: [], running }
+      for (const s of SCENARIOS) {
+        state[s.key] = { personas: saved[s.key]?.personas || {}, refs: saved[s.key]?.refs || {}, results: [], running: false };
+      }
+      function persist() {
+        try {
+          const out = {};
+          for (const s of SCENARIOS) out[s.key] = { personas: state[s.key].personas, refs: state[s.key].refs };
+          localStorage.setItem(STORE_KEY, JSON.stringify(out));
+        } catch { /* storage unavailable: state just won't survive a reload */ }
+      }
 
       let personas = [];
+      let grants = [];
+      let current = SCENARIOS[0].key;
+      try { current = localStorage.getItem(STORE_KEY + ':current') || current; } catch { /* ignore */ }
+      if (!SCENARIOS.some((s) => s.key === current)) current = SCENARIOS[0].key;
+
+      const byId = (id) => personas.find((p) => p.id === id);
+      const scenario = () => SCENARIOS.find((s) => s.key === current);
+
+      async function api(method, path, body) {
+        const res = await fetch(path, {
+          method,
+          headers: body ? { 'content-type': 'application/json', accept: 'application/json' } : { accept: 'application/json' },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, status: res.status, data };
+      }
+
+      async function refresh() {
+        const [p, g] = await Promise.all([api('GET', '/personas'), api('GET', '/grants')]);
+        personas = p.data.personas || [];
+        grants = g.data.grants || [];
+      }
+
+      // ── Context the steps run against ──
+      function ctxFor(s) {
+        const st = state[s.key];
+        const pid = (role) => {
+          const id = st.personas[role];
+          if (!id || !byId(id)) throw new Error('Set up this scenario’s agents first.');
+          return id;
+        };
+        const outcome = (r, okWord = 'allowed') => ({
+          outcome: r.data.success ? okWord : (r.status >= 500 && !r.data.code ? 'error' : 'refused'),
+          code: r.data.code,
+          detail: r.data.detail || r.data.error || JSON.stringify(r.data),
+          data: r.data,
+        });
+        return {
+          async tool(role, toolName, input, user) {
+            const r = await api('POST', '/call-tool', { personaId: pid(role), toolName, input, ...(user ? { userId: user } : {}) });
+            return outcome(r);
+          },
+          async consent(role, user, service, scopes, durability, as) {
+            const r = await api('POST', '/consent', { personaId: pid(role), userId: user, serviceId: service, scopes, durability });
+            if (r.data.success && as) { st.refs[as] = r.data.grant.id; persist(); }
+            return outcome(r, 'done');
+          },
+          async revokeGrant(ref) {
+            const grantId = st.refs[ref];
+            if (!grantId) throw new Error('Run the consent step first.');
+            return outcome(await api('POST', '/revoke-grant', { grantId }), 'done');
+          },
+          async revokeAgent(role) { return outcome(await api('POST', '/revoke-agent', { personaId: pid(role) }), 'done'); },
+          async deactivate(role) { return outcome(await api('POST', '/deactivate-agent', { personaId: pid(role) }), 'done'); },
+          async delegate(from, to, scopes, opts) {
+            return outcome(await api('POST', '/delegate-agent', {
+              fromPersonaId: pid(from), toPersonaId: pid(to), scopes,
+              ...(opts.expiresIn ? { expiresIn: opts.expiresIn } : {}),
+              ...(opts.fromDelegated ? { fromDelegated: true } : {}),
+            }));
+          },
+          async capture(role, toolName, input) {
+            const r = await api('POST', '/attack/capture', { personaId: pid(role), toolName, input });
+            if (r.data.captureId) { st.refs.captureId = r.data.captureId; persist(); }
+            const o = outcome(r);
+            if (r.data.vpId) o.detail = `captured ${r.data.vpId}\n${o.detail}`;
+            return o;
+          },
+          async replay() {
+            if (!st.refs.captureId) throw new Error('Run the capture step first.');
+            return outcome(await api('POST', '/attack/replay', { captureId: st.refs.captureId }));
+          },
+          async tamper(role, toolName, input, addScopes) {
+            return outcome(await api('POST', '/attack/tamper', { personaId: pid(role), toolName, input, addScopes }));
+          },
+          async wrongService(role, signFor, toolName, input) {
+            return outcome(await api('POST', '/attack/wrong-service', { personaId: pid(role), signFor, toolName, input }));
+          },
+          async wait(seconds) {
+            for (let left = seconds; left > 0; left -= 1) {
+              setWaitLabel(`${left}s left…`);
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+            setWaitLabel('');
+            return { outcome: 'done', detail: `Waited ${seconds} seconds.` };
+          },
+        };
+      }
+      let waitLabelEl = null;
+      function setWaitLabel(text) { if (waitLabelEl) waitLabelEl.textContent = text; }
+
+      // ── Rendering ──
+      function roleName(s, role) {
+        const id = state[s.key].personas[role];
+        const p = id && byId(id);
+        if (p) return p.displayName;
+        return (s.agents.find((a) => a.role === role) || {}).name || role;
+      }
+      const fill = (s, text) => text.replace(/\{(\w+)\}/g, (_, role) => roleName(s, role));
+
+      function scenarioStatus(s) {
+        const res = state[s.key].results;
+        if (!res.length || res.length < s.steps.length || res.some((r) => !r)) return '';
+        return res.every((r) => r.pass) ? 'pass' : 'fail';
+      }
+
+      function renderNav() {
+        const nav = document.getElementById('nav');
+        nav.innerHTML = '';
+        let lastGroup = '';
+        for (const s of SCENARIOS) {
+          if (s.group !== lastGroup) {
+            const g = document.createElement('div');
+            g.className = 'group-title';
+            g.textContent = s.group;
+            nav.appendChild(g);
+            lastGroup = s.group;
+          }
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'scn' + (s.key === current ? ' active' : '');
+          const status = scenarioStatus(s);
+          b.innerHTML = `
+            <div class="scn-head">
+              <span class="num"></span><span class="scn-title"></span>
+              <span class="scn-state ${status}">${status === 'pass' ? '✓' : status === 'fail' ? '✗' : ''}</span>
+            </div>
+            <div class="scn-more"><span class="sum"></span><span class="exp"></span></div>`;
+          b.querySelector('.num').textContent = s.key;
+          b.querySelector('.scn-title').textContent = s.title;
+          b.querySelector('.sum').textContent = s.summary;
+          b.querySelector('.exp').textContent = 'Expected: ' + s.expected;
+          b.addEventListener('click', () => select(s.key));
+          nav.appendChild(b);
+        }
+      }
+
+      function pill(text, cls = '') {
+        const span = document.createElement('span');
+        span.className = 'pill ' + cls;
+        span.textContent = text;
+        return span;
+      }
+
+      function renderAgents(s, container) {
+        container.innerHTML = '';
+        for (const a of s.agents) {
+          const id = state[s.key].personas[a.role];
+          const p = id && byId(id);
+          const card = document.createElement('div');
+          if (!p) {
+            card.className = 'agent empty';
+            card.textContent = `${a.name} — not set up yet`;
+            container.appendChild(card);
+            continue;
+          }
+          card.className = 'agent';
+          const name = document.createElement('div');
+          name.className = 'agent-name';
+          name.append(p.displayName);
+          if (p.revokedAt) name.append(pill('credential revoked', 'bad'));
+          if (p.deactivatedAt) name.append(pill('DID deactivated', 'bad'));
+          if (!p.revokedAt && !p.deactivatedAt) name.append(pill('active', 'ok'));
+          card.appendChild(name);
+          const did = document.createElement('div');
+          did.className = 'agent-did';
+          did.textContent = p.did;
+          card.appendChild(did);
+          const own = document.createElement('div');
+          own.className = 'agent-row';
+          own.append('Own scopes: ');
+          if (p.scopes.length) p.scopes.forEach((sc) => own.append(pill(sc)));
+          else own.append(pill('none', 'warn'));
+          if (p.maxDelegationDepth) own.append(pill(`may delegate ${p.maxDelegationDepth} hop`, 'info'));
+          card.appendChild(own);
+          if (p.delegatedScopes?.length) {
+            const del = document.createElement('div');
+            del.className = 'agent-row';
+            const expired = p.delegationExpiresAt && Date.parse(p.delegationExpiresAt) < Date.now();
+            del.append('Delegated by ' + (p.delegatedBy || 'another agent') + ': ');
+            p.delegatedScopes.forEach((sc) => del.append(pill(sc, expired ? 'bad' : 'info')));
+            if (p.delegationExpiresAt) del.append(pill((expired ? 'expired ' : 'until ') + new Date(p.delegationExpiresAt).toLocaleTimeString(), expired ? 'bad' : ''));
+            card.appendChild(del);
+          }
+          const mine = grants.filter((g) => g.personaId === p.id);
+          for (const g of mine) {
+            const row = document.createElement('div');
+            row.className = 'agent-row';
+            row.append(`Consent from ${USERS[g.userId]} at ${SERVICE_LABEL[g.serviceId]}: `);
+            g.scopes.forEach((sc) => row.append(pill(sc, g.revokedAt ? 'bad' : 'ok')));
+            row.append(pill(g.revokedAt ? 'revoked' : `${g.durability} · until ${new Date(g.validUntil).toLocaleDateString()}`, g.revokedAt ? 'bad' : ''));
+            card.appendChild(row);
+          }
+          container.appendChild(card);
+        }
+      }
+
+      function outcomePill(r) {
+        if (r.outcome === 'allowed') return pill('✓ allowed', 'ok');
+        if (r.outcome === 'refused') return pill('⛔ refused' + (r.code ? ' · ' + r.code : ''), 'bad');
+        if (r.outcome === 'done') return pill('✓ done', 'info');
+        return pill('error' + (r.code ? ' · ' + r.code : ''), 'warn');
+      }
+
+      function judge(step, r) {
+        if (r.outcome === 'error') return false;
+        if (step.expect === 'done') return r.outcome === 'done';
+        if (r.outcome !== step.expect) return false;
+        return !step.expectCode || r.code === step.expectCode;
+      }
+
+      function prettyDetail(r) {
+        const d = r.data?.data;
+        if (r.outcome === 'allowed' && d && typeof d === 'object') return JSON.stringify(d, null, 2);
+        return r.detail || '';
+      }
+
+      function renderMain() {
+        const s = scenario();
+        const st = state[s.key];
+        const main = document.getElementById('main');
+        main.innerHTML = `
+          <div class="scn-header">
+            <div class="big-num"></div>
+            <div><div class="kicker"></div><h2></h2></div>
+          </div>
+          <p class="lead"></p>
+          <div class="proves"><b>What this demonstrates — </b><span class="sum"></span><br /><span class="exp"></span></div>
+          <div class="toolbar">
+            <button class="btn" id="setup" type="button"></button>
+            <button class="btn primary" id="run-all" type="button">Run all steps</button>
+            <span id="wait" style="align-self:center;color:var(--warn);font-size:12px"></span>
+          </div>
+          <div class="section-label">Agents in this scenario</div>
+          <div class="agents" id="agents"></div>
+          <div class="section-label">Steps</div>
+          <div class="steps" id="steps"></div>
+          <div class="section-label" id="prompts-label">Try it in chat</div>
+          <div class="prompts" id="prompts"></div>`;
+        main.querySelector('.big-num').textContent = s.key;
+        main.querySelector('.kicker').textContent = s.group;
+        main.querySelector('h2').textContent = s.title;
+        main.querySelector('.lead').textContent = s.lead;
+        main.querySelector('.proves .sum').textContent = s.summary;
+        main.querySelector('.proves .exp').textContent = 'Expected: ' + s.expected;
+        waitLabelEl = main.querySelector('#wait');
+
+        const isSetUp = s.agents.every((a) => st.personas[a.role] && byId(st.personas[a.role]));
+        const setupBtn = main.querySelector('#setup');
+        setupBtn.textContent = isSetUp ? 'Reset with fresh agents' : 'Set up agents';
+        setupBtn.disabled = st.running;
+        setupBtn.addEventListener('click', () => setup(s));
+        const runAll = main.querySelector('#run-all');
+        runAll.disabled = st.running;
+        runAll.addEventListener('click', () => runAllSteps(s));
+
+        renderAgents(s, main.querySelector('#agents'));
+
+        const stepsEl = main.querySelector('#steps');
+        s.steps.forEach((step, i) => {
+          const r = st.results[i];
+          const el = document.createElement('div');
+          el.className = 'step' + (r ? (r.pass ? ' pass' : ' fail') : '');
+          el.innerHTML = `
+            <div class="step-row">
+              <span class="step-idx">${i + 1}</span>
+              <div class="step-label"><span class="lbl"></span><span class="who"></span></div>
+              <span class="expect"></span>
+              <button class="btn small" type="button">Run</button>
+            </div>`;
+          el.querySelector('.lbl').textContent = fill(s, step.label);
+          el.querySelector('.who').textContent = fill(s, step.who || '');
+          el.querySelector('.expect').textContent =
+            step.expect === 'done' ? '' : 'expect ' + step.expect + (step.expectCode ? ' · ' + step.expectCode : '');
+          const btn = el.querySelector('button');
+          btn.disabled = st.running;
+          btn.addEventListener('click', () => runStep(s, i));
+          if (r) {
+            const res = document.createElement('div');
+            res.className = 'result';
+            res.appendChild(outcomePill(r));
+            res.appendChild(pill(r.pass ? 'as expected' : 'NOT as expected', r.pass ? 'ok' : 'warn'));
+            const detail = prettyDetail(r);
+            if (detail) {
+              const d = document.createElement('div');
+              d.className = 'detail';
+              d.textContent = detail;
+              res.appendChild(d);
+            }
+            el.appendChild(res);
+          }
+          stepsEl.appendChild(el);
+        });
+
+        const promptsEl = main.querySelector('#prompts');
+        main.querySelector('#prompts-label').hidden = s.prompts.length === 0;
+        for (const p of s.prompts) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'prompt';
+          b.textContent = `${roleName(s, p.role)}${p.user ? ' for ' + USERS[p.user].split(' ')[0] : ''}: “${p.text}”`;
+          b.addEventListener('click', () => useInChat(s, p));
+          promptsEl.appendChild(b);
+        }
+      }
+
+      function render() {
+        renderNav();
+        renderMain();
+        renderPersonaSelect();
+      }
+
+      function select(key) {
+        current = key;
+        try { localStorage.setItem(STORE_KEY + ':current', key); } catch { /* ignore */ }
+        render();
+      }
+
+      // ── Running ──
+      async function setup(s) {
+        const st = state[s.key];
+        st.running = true;
+        st.results = [];
+        st.refs = {};
+        render();
+        const suffix = Math.random().toString(36).slice(2, 6);
+        try {
+          for (const a of s.agents) {
+            const r = await api('POST', '/onboard-agent', {
+              personaId: `s${s.key.toLowerCase()}-${a.role}-${suffix}`,
+              displayName: `${a.name} · ${s.key}`,
+              scopes: a.scopes,
+              ...(a.depth ? { maxDelegationDepth: a.depth } : {}),
+              group: `${s.key} — ${s.title}`,
+            });
+            if (!r.ok) throw new Error(r.data.detail || r.data.error || 'HTTP ' + r.status);
+            st.personas[a.role] = r.data.persona.id;
+          }
+          persist();
+        } catch (e) {
+          alert('Setting up agents failed:\n\n' + e.message);
+        } finally {
+          st.running = false;
+          await refresh();
+          render();
+        }
+      }
+
+      async function runStep(s, i, inBatch = false) {
+        const st = state[s.key];
+        if (!inBatch) { st.running = true; renderMain(); }
+        let r;
+        try {
+          r = await s.steps[i].run(ctxFor(s));
+        } catch (e) {
+          r = { outcome: 'error', detail: e.message };
+        }
+        r.pass = judge(s.steps[i], r);
+        st.results[i] = r;
+        await refresh();
+        if (!inBatch) st.running = false;
+        render();
+        return r;
+      }
+
+      async function runAllSteps(s) {
+        const st = state[s.key];
+        // Steps assume pristine agents (no earlier revocation, grant or
+        // delegation), so a full run always starts from freshly onboarded ones.
+        await setup(s);
+        if (!s.agents.every((a) => st.personas[a.role] && byId(st.personas[a.role]))) return;
+        st.running = true;
+        st.results = [];
+        render();
+        for (let i = 0; i < s.steps.length; i += 1) {
+          const r = await runStep(s, i, true);
+          if (r.outcome === 'error' && /Set up/.test(r.detail)) break;
+        }
+        st.running = false;
+        render();
+      }
+
+      // ── Chat ──
+      const log = document.getElementById('log');
+      const personaSel = document.getElementById('persona');
+      const onBehalfSel = document.getElementById('onbehalf');
+      const chatScopes = document.getElementById('chat-scopes');
+      const input = document.getElementById('m');
+      const sendBtn = document.getElementById('send');
+      const conversationId = 'web-' + Math.random().toString(36).slice(2, 10);
+      let lastMessage = '';
+
+      onBehalfSel.innerHTML = '<option value="">Nobody — agent’s own authority</option>' +
+        Object.entries(USERS).map(([id, name]) => `<option value="${id}">${name}</option>`).join('');
 
       function add(cls, text) {
         const d = document.createElement('div');
@@ -229,196 +926,78 @@
         return d;
       }
 
-      function activePersona() {
-        return personas.find((p) => p.id === personaSel.value);
-      }
-
-      function renderScopes() {
-        const p = activePersona();
-        if (!p) {
-          scopesEl.textContent = '';
-          return;
+      function renderPersonaSelect() {
+        const currentValue = personaSel.value;
+        const groups = new Map();
+        for (const p of personas) {
+          const g = p.group || 'Other agents';
+          if (!groups.has(g)) groups.set(g, []);
+          groups.get(g).push(p);
         }
-        const delegated = p.delegatedScopes?.length
-          ? ' | delegated: ' + p.delegatedScopes.join(', ')
-          : '';
-        scopesEl.textContent = 'scopes: ' + ((p.scopes || []).join(', ') || 'none') + delegated;
-      }
-
-      function selectTab(tabName) {
-        document.querySelectorAll('[role="tab"]').forEach((tab) => {
-          const active = tab.dataset.tab === tabName;
-          tab.classList.toggle('active', active);
-          tab.setAttribute('aria-selected', active ? 'true' : 'false');
-        });
-        document.querySelectorAll('[role="tabpanel"]').forEach((panel) => {
-          panel.hidden = panel.id !== 'panel-' + tabName;
-        });
-      }
-
-      let loadErrorShown = false;
-      async function loadPersonas() {
-        try {
-          const res = await fetch('/personas', { headers: { accept: 'application/json' } });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const data = await res.json();
-          const next = data.personas || [];
-          // Only re-render options if the set changed (avoid clobbering selection).
-          const changed = JSON.stringify(next.map((p) => p.id)) !== JSON.stringify(personas.map((p) => p.id));
-          personas = next;
-          if (changed) {
-            const current = personaSel.value;
-            personaSel.innerHTML = '';
-            for (const p of personas) {
-              const o = document.createElement('option');
-              o.value = p.id;
-              o.textContent = p.displayName;
-              personaSel.appendChild(o);
-            }
-            if (personas.some((p) => p.id === current)) personaSel.value = current;
+        personaSel.innerHTML = '';
+        if (!personas.length) {
+          const o = document.createElement('option');
+          o.textContent = 'No agents yet — set up a scenario';
+          o.value = '';
+          personaSel.appendChild(o);
+        }
+        for (const [g, list] of groups) {
+          const og = document.createElement('optgroup');
+          og.label = g;
+          for (const p of list) {
+            const o = document.createElement('option');
+            o.value = p.id;
+            o.textContent = p.displayName + (p.revokedAt ? ' (revoked)' : p.deactivatedAt ? ' (deactivated)' : '');
+            og.appendChild(o);
           }
-          renderScopes();
-          sendBtn.disabled = personas.length === 0;
-          loadErrorShown = false;
-        } catch (e) {
-          // Surface the failure instead of leaving a silently-dead UI.
-          sendBtn.disabled = true;
-          if (!loadErrorShown) {
-            add('bot', 'Could not load agents from the backend (GET /personas failed: ' + e.message + '). Is the agent service up?');
-            loadErrorShown = true;
-          }
+          personaSel.appendChild(og);
         }
+        if (personas.some((p) => p.id === currentValue)) personaSel.value = currentValue;
+        renderChatScopes();
       }
 
-      async function onboardAgent() {
-        const token = onboardToken.value.trim();
-        const displayName = onboardName.value.trim();
-        if (!token) {
-          add('bot', 'Paste an onboard token generated from HelixID Console first.');
-          onboardToken.focus();
-          return;
-        }
-
-        onboardSubmit.disabled = true;
-        const status = add('meta', 'Onboarding new agent…');
-        try {
-          const res = await fetch('/onboard-agent', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify({ bootstrapToken: token, displayName }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-
-          onboardToken.value = '';
-          onboardName.value = '';
-          await loadPersonas();
-          if (data.persona?.id) {
-            personaSel.value = data.persona.id;
-            renderScopes();
-          }
-          onboardPanel.classList.remove('open');
-          status.remove();
-          add('bot', 'Onboarded ' + (data.persona?.displayName || 'new agent') + '. It is now selectable as the acting agent.');
-        } catch (e) {
-          status.remove();
-          add('bot', 'Onboarding failed: ' + e.message);
-        } finally {
-          onboardSubmit.disabled = false;
-        }
+      function renderChatScopes() {
+        const p = byId(personaSel.value);
+        sendBtn.disabled = !p;
+        if (!p) { chatScopes.textContent = ''; return; }
+        const delegated = p.delegatedScopes?.length ? ' · delegated: ' + p.delegatedScopes.join(', ') : '';
+        chatScopes.textContent = 'scopes: ' + (p.scopes.join(', ') || 'none') + delegated;
       }
 
-      async function revokeActiveAgent() {
-        const persona = activePersona();
-        if (!persona) {
-          add('bot', 'Select an agent before revoking a credential.');
-          return;
-        }
-        scenarioRevoke.disabled = true;
-        const status = add('meta', 'Revoking ' + persona.displayName + ' credential…');
-        try {
-          const res = await fetch('/revoke-agent', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify({ personaId: persona.id }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-          status.remove();
-          add('bot', 'Revoked ' + persona.displayName + ' credential ' + data.vcId + '. Try the same booking now; HelixID should refuse the VP.');
-        } catch (e) {
-          status.remove();
-          add('bot', 'Revocation failed: ' + e.message);
-        } finally {
-          scenarioRevoke.disabled = false;
-        }
-      }
-
-      async function setupDelegationAgents() {
-        scenarioDelegationSetup.disabled = true;
-        const status = add('meta', 'Creating Planner Agent and Research Agent…');
-        try {
-          const res = await fetch('/delegation-demo-agents', {
-            method: 'POST',
-            headers: { accept: 'application/json' },
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-          await loadPersonas();
-          status.remove();
-          add('bot', 'Created delegation demo agents: Planner Agent has read:catalog + write:orders; Research Agent starts with no tool scopes.');
-        } catch (e) {
-          status.remove();
-          add('bot', 'Delegation setup failed: ' + e.message);
-        } finally {
-          scenarioDelegationSetup.disabled = false;
-        }
-      }
-
-      async function delegateToResearchAgent() {
-        scenarioDelegate.disabled = true;
-        const status = add('meta', 'Delegating read access from Planner Agent to Research Agent…');
-        try {
-          const res = await fetch('/delegate-agent', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify({
-              fromPersonaId: 'delegation-planner',
-              toPersonaId: 'delegation-research',
-              scopes: ['read:catalog'],
-            }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-          await loadPersonas();
-          personaSel.value = 'delegation-research';
-          renderScopes();
-          status.remove();
-          add('bot', 'Delegated read:catalog from Planner Agent to Research Agent. Research Agent is selected and will present the delegated credential.');
-        } catch (e) {
-          status.remove();
-          add('bot', 'Delegation failed: ' + e.message);
-        } finally {
-          scenarioDelegate.disabled = false;
-        }
+      function useInChat(s, p) {
+        const id = state[s.key].personas[p.role];
+        if (!id || !byId(id)) { alert('Set up this scenario’s agents first.'); return; }
+        personaSel.value = id;
+        onBehalfSel.value = p.user || '';
+        renderChatScopes();
+        input.value = p.text;
+        input.focus();
       }
 
       async function send(message) {
-        const persona = activePersona();
-        if (!persona) return;
+        const p = byId(personaSel.value);
+        if (!p) return;
+        lastMessage = message;
+        const user = onBehalfSel.value;
         add('user', message);
         input.value = '';
         sendBtn.disabled = true;
-        const thinking = add('meta', persona.displayName + ' is thinking…');
+        const thinking = add('meta', `${p.displayName}${user ? ' for ' + USERS[user] : ''} is thinking…`);
         try {
-          const res = await fetch('/chat', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ personaId: persona.id, message, conversationId }),
-          });
-          const data = await res.json();
+          const r = await api('POST', '/chat', { personaId: p.id, message, conversationId, ...(user ? { userId: user } : {}) });
           thinking.remove();
-          add('bot', data.reply || data.message || data.error || '(no reply)');
+          const bot = add('bot', r.data.reply || r.data.message || r.data.error || '(no reply)');
+          if (r.data.trace?.length) {
+            const t = document.createElement('div');
+            t.className = 'trace';
+            for (const call of r.data.trace) {
+              t.appendChild(pill(`${call.tool} ${call.success ? '✓' : '⛔ ' + (call.code || 'refused')}`, call.success ? 'ok' : 'bad'));
+            }
+            bot.appendChild(t);
+          }
+          if (r.data.consentRequired) openConsent(p, r.data.consentRequired);
+          await refresh();
+          renderMain();
         } catch (e) {
           thinking.remove();
           add('bot', 'Request failed: ' + e.message);
@@ -428,65 +1007,61 @@
         }
       }
 
+      // ── The service's consent screen ──
+      const modal = document.getElementById('consent-modal');
+      let pendingConsent = null;
+      function openConsent(persona, prompt) {
+        pendingConsent = { persona, prompt };
+        document.getElementById('consent-sp').textContent = prompt.serviceName + ' · consent';
+        document.getElementById('consent-title').textContent = `${prompt.userName}, allow ${persona.displayName}?`;
+        document.getElementById('consent-body').textContent =
+          `${persona.displayName} wants to act for you at ${prompt.serviceName}. ${prompt.serviceName} will sign a consent credential naming you, the agent, and what it may do.`;
+        const scopesEl = document.getElementById('consent-scopes');
+        scopesEl.innerHTML = '';
+        for (const sc of prompt.scopes) {
+          const l = document.createElement('label');
+          l.innerHTML = '<input type="checkbox" checked /> <span></span>';
+          l.querySelector('input').value = sc;
+          l.querySelector('span').textContent = `${SCOPE_LABEL[sc] === 'book' ? 'Make bookings' : 'Search on my behalf'} (${sc})`;
+          scopesEl.appendChild(l);
+        }
+        modal.classList.add('open');
+      }
+      document.getElementById('consent-decline').addEventListener('click', () => {
+        modal.classList.remove('open');
+        add('meta', 'Consent declined — nothing was issued.');
+        pendingConsent = null;
+      });
+      document.getElementById('consent-approve').addEventListener('click', async () => {
+        if (!pendingConsent) return;
+        const { persona, prompt } = pendingConsent;
+        const scopes = [...document.querySelectorAll('#consent-scopes input:checked')].map((i) => i.value);
+        const durability = document.querySelector('input[name=durability]:checked').value;
+        modal.classList.remove('open');
+        pendingConsent = null;
+        if (!scopes.length) { add('meta', 'No scopes selected — nothing was issued.'); return; }
+        const r = await api('POST', '/consent', { personaId: persona.id, userId: prompt.userId, serviceId: prompt.serviceId, scopes, durability });
+        add('meta', r.data.success ? '✓ ' + r.data.detail : 'Consent failed: ' + (r.data.detail || r.data.error));
+        await refresh();
+        renderMain();
+        if (r.data.success && lastMessage) send(lastMessage);
+      });
+
       personaSel.addEventListener('change', () => {
-        renderScopes();
-        const p = activePersona();
+        renderChatScopes();
+        const p = byId(personaSel.value);
         if (p) add('meta', '— now acting as ' + p.displayName + ' —');
       });
-      openOnboardBtn.addEventListener('click', () => {
-        onboardPanel.classList.toggle('open');
-        if (onboardPanel.classList.contains('open')) onboardToken.focus();
-      });
-      scenarioOnboard.addEventListener('click', () => {
-        onboardPanel.classList.add('open');
-        onboardName.value = onboardName.value || 'Search Agent';
-        onboardToken.focus();
-      });
-      scenarioSelectConcierge.addEventListener('click', () => {
-        if (personas.some((p) => p.id === 'concierge')) {
-          personaSel.value = 'concierge';
-          renderScopes();
-          add('meta', '— now acting as Concierge Agent —');
-        } else {
-          add('bot', 'Concierge Agent is not loaded yet. Wait for setup to finish and /personas to refresh.');
-        }
-      });
-      scenarioRevoke.addEventListener('click', revokeActiveAgent);
-      scenarioDelegationSetup.addEventListener('click', setupDelegationAgents);
-      scenarioDelegate.addEventListener('click', delegateToResearchAgent);
-      scenarioSelectResearch.addEventListener('click', () => {
-        if (personas.some((p) => p.id === 'delegation-research')) {
-          personaSel.value = 'delegation-research';
-          renderScopes();
-          add('meta', '— now acting as Research Agent —');
-        } else {
-          add('bot', 'Research Agent is not loaded yet. Click “Create demo agents” first.');
-        }
-      });
-      onboardForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        onboardAgent();
-      });
-      form.addEventListener('submit', (e) => {
+      document.getElementById('chat-form').addEventListener('submit', (e) => {
         e.preventDefault();
         const v = input.value.trim();
         if (v) send(v);
       });
-      document.querySelectorAll('.chip').forEach((c) =>
-        c.addEventListener('click', () => send(c.dataset.p)),
-      );
-      document.querySelectorAll('[role="tab"]').forEach((tab) =>
-        tab.addEventListener('click', () => selectTab(tab.dataset.tab)),
-      );
-      document.querySelectorAll('[data-fill]').forEach((b) =>
-        b.addEventListener('click', () => {
-          input.value = b.dataset.fill;
-          input.focus();
-        }),
-      );
 
-      loadPersonas();
-      setInterval(loadPersonas, 4000);
+      refresh().then(render).catch((e) => {
+        render();
+        add('bot', 'Could not load agents from the backend (' + e.message + '). Is `pnpm run agent` up?');
+      });
     </script>
   </body>
 </html>
