@@ -1,0 +1,134 @@
+name: E2E
+
+# Runs the Playwright e2e suite (helixid/e2e-playwright) for the open-source
+# edition: helixid (the API) and helix-console, with this repo at the PR's
+# commit and the other Helix repos on main.
+#
+# This repository is public and e2e-playwright is private, and GitHub does not
+# let a public repository call a reusable workflow from a private one. So this
+# job checks the repos out itself and runs e2e-playwright's scripts/ci-run.sh,
+# the same script e2e-playwright's own workflow runs: the steps live there,
+# in one place.
+#
+# Uses the HELIX_E2E_TOKEN secret (read access to e2e-playwright). Secrets are
+# not given to pull requests from forks, so those are skipped.
+#
+# The suite's oss edition is still being brought up (see e2e-playwright's
+# TODO.md), so a red run here is expected for now and is not a merge blocker.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+    inputs:
+      e2e_ref:
+        description: e2e-playwright branch/ref
+        default: main
+      grep:
+        description: Only run tests matching this pattern (e.g. @smoke)
+        default: ''
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Pinned: ubuntu-latest is Ubuntu 26.04, for which actions/python-versions has no
+    # Python 3.11.11 build (the version helix-sdk-py/.python-version pins).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    env:
+      HELIX_EDITION: oss
+
+    steps:
+      - name: Check HELIX_E2E_TOKEN
+        env:
+          HELIX_E2E_TOKEN: ${{ secrets.HELIX_E2E_TOKEN }}
+        run: |
+          if [ -z "$HELIX_E2E_TOKEN" ]; then
+            echo "::error::HELIX_E2E_TOKEN is not set on this repository. Add it as a repo or org secret: a token with read access to the private helixid/e2e-playwright."
+            exit 1
+          fi
+
+      # This repo, at the commit under test.
+      - name: Checkout helixid
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: helixid
+
+      - name: Checkout e2e-playwright
+        uses: actions/checkout@v4
+        with:
+          repository: helixid/e2e-playwright
+          ref: ${{ inputs.e2e_ref || 'main' }}
+          token: ${{ secrets.HELIX_E2E_TOKEN }}
+          path: e2e-playwright
+
+      - name: Checkout helix-console
+        uses: actions/checkout@v4
+        with:
+          repository: helixid/helix-console
+          path: helix-console
+
+      - name: Checkout helix-core
+        uses: actions/checkout@v4
+        with:
+          repository: helixid/helix-core
+          path: helix-core
+
+      - name: Checkout helix-sdk-js
+        uses: actions/checkout@v4
+        with:
+          repository: helixid/helix-sdk-js
+          path: helix-sdk-js
+
+      - name: Checkout helix-sdk-py
+        uses: actions/checkout@v4
+        with:
+          repository: helixid/helix-sdk-py
+          path: helix-sdk-py
+
+      # pnpm 11, as e2e-playwright uses; repos that pin pnpm@9.15.2 in
+      # packageManager get it from pnpm 11, which switches to it there.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: e2e-playwright/.nvmrc
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: helix-sdk-py/.python-version
+
+      - name: Run the E2E suite
+        env:
+          GREP: ${{ inputs.grep }}
+        run: e2e-playwright/scripts/ci-run.sh
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e-playwright/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: e2e-playwright/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
