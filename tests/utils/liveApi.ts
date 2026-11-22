@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { expect } from 'vitest';
-import type { SignedVC, SignedVP } from '@helixid/sdk-js';
+import type { SignedVC } from '@helixid/sdk-js';
 import { createTestPrisma } from './prisma.js';
 
 export const LIVE_HEDERA_TIMEOUT_MS = 240_000;
@@ -187,8 +187,7 @@ export async function startLiveApi(): Promise<LiveApi> {
  * Onboards an agent through the real single-call, server-custody flow —
  * agent self-custody (client-generated keypair, wallet file, passphrase)
  * has been retired. The server generates and holds the private key; the
- * only handle a caller gets back is the DID, used afterward to request a
- * signed VP via signLiveVP() below.
+ * only handle a caller gets back is the DID.
  */
 export async function onboardLiveAgent(
   api: LiveApi,
@@ -221,30 +220,6 @@ export async function onboardLiveAgent(
   const onboarding = (await onboardRes.json()) as { agentDid: string; vcId: string };
 
   return { did: onboarding.agentDid, vcId: onboarding.vcId };
-}
-
-/**
- * Signs a VP server-side for an agent onboarded via onboardLiveAgent() —
- * there is no local private key to build one with anymore, so this is an
- * API call (POST /v1/agents/:did/vp) rather than local VPBuilder use.
- * Gated by the admin key, same as every other privileged live-test call.
- */
-export async function signLiveVP(
-  api: LiveApi,
-  holderDid: string,
-  options: { targetService: string; userDid?: string },
-): Promise<SignedVP> {
-  const res = await fetch(`${api.baseUrl}/v1/agents/${encodeURIComponent(holderDid)}/vp`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-api-key': api.adminApiKey },
-    body: JSON.stringify({
-      targetService: options.targetService,
-      ...(options.userDid !== undefined ? { userDid: options.userDid } : {}),
-    }),
-  });
-  expect(res.status).toBe(200);
-  const { signedVP } = (await res.json()) as { signedVP: SignedVP };
-  return signedVP;
 }
 
 /**

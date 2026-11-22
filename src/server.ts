@@ -53,8 +53,7 @@ import {
   VcRepository,
   vcRoutes,
   VCService,
-  vpRoutes,
-  VPService,
+  verifyRoutes,
   type DIDDocument,
   type RedisLike,
 } from '@helixid/core';
@@ -133,11 +132,6 @@ const vcService = new VCService(
   statusListCache,
   config.STATUS_LIST_CACHE_L1_TTL_SECONDS,
 );
-const vpService = new VPService(vcService, auditTrail, config.API_BASE_URL, {
-  signingKey: jwtSessionKeyPair.privateKey,
-  issuerDid: config.HELIX_ISSUER_DID,
-  ttlSeconds: config.JWT_SESSION_TTL_SECONDS,
-});
 // Agent self-custody has been retired — every agent's private key is now
 // generated and held here, encrypted with this one shared master key. Unset
 // in dev falls back to a random per-process key (fine for local dev; means
@@ -272,7 +266,8 @@ await app.register(statusListRoutes, {
   vcService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
-await app.register(vpRoutes, { prefix: '/v1/vp', vpService });
+// KYA-OS story F-2: the local verifier over HTTP; /v1/vp/verify is retired. It reads no database.
+await app.register(verifyRoutes, { prefix: '/v1/verify', allowLoopbackHttp: config.NODE_ENV !== 'production' });
 await app.register(sessionRoutes, {
   prefix: '/v1/sessions',
   publicKeyHex: jwtSessionKeyPair.publicKey,
