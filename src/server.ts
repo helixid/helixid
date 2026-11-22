@@ -21,6 +21,7 @@ import {
   AesGcmKeyCustody,
   AgentRepository,
   agentRoutes,
+  agentKeyRoutes,
   AgentService,
   auditLogRoutes,
   auditRoutes,
@@ -30,11 +31,13 @@ import {
   createDidCache,
   createHederaClient,
   createStatusListCache,
+  CredentialService,
   derivePublicKey,
   DidKeyRepository,
   DidRepository,
   didRoutes,
   DIDService,
+  EnvSigner,
   didWebRoutes,
   errorHandler,
   extractEd25519PublicKeyHexFromDIDDocument,
@@ -142,6 +145,18 @@ const vpService = new VPService(vcService, auditTrail, config.API_BASE_URL, {
 // pattern as HOSTED_ACCESS_TOKEN_SECRET below it.
 const agentKeyEncryptionKey = config.HOSTED_KEY_ENCRYPTION_KEY ?? crypto.randomBytes(32).toString('hex');
 const keyCustody = new AesGcmKeyCustody(agentKeyEncryptionKey);
+// KYA-OS story F-1: identity, attestations and hops. The Helix issuer signs
+// through an EnvSigner (the key stays in HELIX_SIGNING_KEY); custodial keys
+// sign through the key custody. Copies land in the vcs table for the console.
+const credentialService = new CredentialService(
+  vcRepository,
+  vcService,
+  didService,
+  new EnvSigner({ did: config.HELIX_ISSUER_DID }),
+  didKeyRepository,
+  keyCustody,
+  auditTrail,
+);
 const agentService = new AgentService(
   agentRepository,
   didService,
@@ -149,6 +164,7 @@ const agentService = new AgentService(
   auditTrail,
   didKeyRepository,
   keyCustody,
+  credentialService,
 );
 
 // Services are custodial too: same master key and custody object as agents.
@@ -248,6 +264,7 @@ await app.register(didWebRoutes, { issuerDid: config.HELIX_ISSUER_DID, didDomain
 await app.register(vcRoutes, {
   prefix: '/v1/vcs',
   vcService,
+  credentialService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
 await app.register(statusListRoutes, {
@@ -273,8 +290,10 @@ await app.register(auditRoutes, {
 await app.register(agentRoutes, {
   prefix: '/v1',
   agentService,
+  credentialService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
+await app.register(agentKeyRoutes, { prefix: '/v1', didRepository, didCache, adminApiKey: config.HELIX_ADMIN_API_KEY });
 await app.register(serviceProviderRoutes, {
   prefix: '/v1',
   serviceProviderService,

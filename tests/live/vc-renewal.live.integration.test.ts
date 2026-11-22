@@ -5,14 +5,14 @@ import {
   LIVE_HEDERA_TIMEOUT_MS,
   onboardLiveAgent,
   resetLiveTestDatabase,
-  enrollLiveService,
-  signLiveVP,
   startLiveApi,
   type LiveApi,
 } from '../utils/liveApi.js';
 
-// Renewal here is HelixClient.renewVC() — the server-signed path for a VC the
-// hosted issuer originally signed (which is what onboarding produces).
+// Renewal here is HelixClient.renewVC() on the agent's identity credential
+// (F-1): the hosted issuer re-signs the same agent, name and responsible
+// party with a fresh id and validity. Scopes live in capability
+// attestations and are not part of renewal.
 describe('VC Renewal Live Integration', () => {
   let api: LiveApi;
 
@@ -25,7 +25,7 @@ describe('VC Renewal Live Integration', () => {
     await api?.stop();
   });
 
-  it('issues a fresh VC on renewal and links it back to the one it replaces', async () => {
+  it('issues a fresh identity credential on renewal and links it back to the one it replaces', async () => {
     const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
     const http = supertest(api.baseUrl);
     const agent = await onboardLiveAgent(api, {
@@ -34,34 +34,37 @@ describe('VC Renewal Live Integration', () => {
       requestedDomains: ['https://live-renewal.agent.example.com'],
     });
 
-    const renewed = await client.renewVC(agent.vcId, {
-      privilegeScopes: ['read:orders'],
-    });
+    const renewed = await client.renewVC(agent.vcId, {});
 
     expect(renewed.vcId).not.toBe(agent.vcId);
-    expect((renewed.vc as Record<string, unknown>)['credentialSubject']).toMatchObject({
+    expect(renewed.vcId).toMatch(/^urn:uuid:/);
+    const renewedVc = renewed.vc as Record<string, unknown>;
+    expect(renewedVc['type']).toEqual(expect.arrayContaining(['VerifiableCredential', 'AgentIdentityCredential']));
+    expect(renewedVc['issuer']).toBe(api.issuerDid);
+    expect(renewedVc['credentialSubject']).toMatchObject({
       id: agent.did,
-      privilegeScopes: ['read:orders'],
+      name: 'Live Renewal Agent',
+      responsibleParty: api.issuerDid,
     });
 
     const oldVcDetails = await client.getVC(agent.vcId);
     expect(oldVcDetails.renewedByVcId).toBe(renewed.vcId);
+    // Renewal does not revoke the old identity credential: a separate lineage.
+    expect(oldVcDetails.status).toBe('active');
 
-    // The old VC stays active with its original (wider) scopes — renewal
-    // doesn't revoke it, it's a separate credential lineage. The VP carries
-    // both, and the verifier takes the union of their scopes.
-    const service = await enrollLiveService(api);
-    const signedVP = await signLiveVP(api, agent.did, { targetService: service.did });
-    const credentialIds = signedVP.verifiableCredential.map((vc) => (vc as { id: string }).id);
-    expect(credentialIds).toEqual(expect.arrayContaining([agent.vcId, renewed.vcId]));
-    const verifyRes = await http.post('/v1/vp/verify').send({ signedVP });
-    expect(verifyRes.statusCode).toBe(200);
-    expect(verifyRes.body.privilegeScopes).toEqual(
-      expect.arrayContaining(['read:orders', 'write:orders']),
-    );
+    // Helix keeps a copy: the listing now leads with the renewed identity, attestations untouched.
+    const credentialsRes = await http
+      .get(`/v1/agents/${encodeURIComponent(agent.did)}/credentials`)
+      .set('x-admin-api-key', api.adminApiKey);
+    expect(credentialsRes.statusCode).toBe(200);
+    expect(credentialsRes.body.identity.vcId).toBe(renewed.vcId);
+    const attested = (credentialsRes.body.attestations as Array<{ credential: { credentialSubject: { capability: string } } }>)
+      .map((entry) => entry.credential.credentialSubject.capability)
+      .sort();
+    expect(attested).toEqual(['read:orders', 'write:orders']);
   }, LIVE_HEDERA_TIMEOUT_MS);
 
-  it('rejects renewing an already-revoked VC', async () => {
+  it('rejects renewing an already-revoked identity credential', async () => {
     const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
     const http = supertest(api.baseUrl);
     const agent = await onboardLiveAgent(api, {

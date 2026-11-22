@@ -5,8 +5,6 @@ import {
   LIVE_HEDERA_TIMEOUT_MS,
   onboardLiveAgent,
   resetLiveTestDatabase,
-  enrollLiveService,
-  signLiveVP,
   startLiveApi,
   type LiveApi,
 } from '../utils/liveApi.js';
@@ -36,7 +34,8 @@ describe('Onboarding Live Integration', () => {
     // work equally well and need no Hedera network at all, so this only
     // pins the shape, not a specific method.
     expect(agent.did).toMatch(/^did:(hedera:testnet:[a-zA-Z0-9._-]+|key:z\w+|web:[\w.:%-]+)$/);
-    expect(agent.vcId).toMatch(/^vc:helix:/);
+    // F-1: the onboarding VC is the agent's identity credential, id urn:uuid:<v4>.
+    expect(agent.vcId).toMatch(/^urn:uuid:/);
 
     const didRes = await supertest(api.baseUrl).get(`/v1/dids/${agent.did}`);
     expect(didRes.statusCode).toBe(200);
@@ -47,23 +46,35 @@ describe('Onboarding Live Integration', () => {
     // Prisma/Postgres query, so this passes under any configured storage
     // adapter (sqlite in this sandbox, Postgres elsewhere).
     const vcRecord = await client.getVC(agent.vcId);
-    expect((vcRecord.vc as Record<string, unknown>)['issuer']).toBe(api.issuerDid);
+    const identity = vcRecord.vc as Record<string, unknown>;
+    expect(identity['issuer']).toBe(api.issuerDid);
     expect(vcRecord.status).toBe('active');
-    expect((vcRecord.vc as { credentialSubject: { id: string; type: string } })['credentialSubject']).toMatchObject({
+    expect(identity['type']).toEqual(expect.arrayContaining(['VerifiableCredential', 'AgentIdentityCredential']));
+    expect(identity['credentialSubject']).toMatchObject({
       id: agent.did,
-      type: 'HelixAgent',
+      name: 'Live Onboarding Agent',
+      responsibleParty: api.issuerDid,
     });
-    expect((vcRecord.vc as { proof: { verificationMethod: string } })['proof'].verificationMethod).toBe(
-      `${api.issuerDid}#key-1`,
-    );
+    expect((identity['proof'] as { type: string; cryptosuite: string; verificationMethod: string })).toMatchObject({
+      type: 'DataIntegrityProof',
+      cryptosuite: 'eddsa-jcs-2022',
+      verificationMethod: `${api.issuerDid}#key-1`,
+    });
+
+    // One capability attestation per requested scope, kept by Helix next to the identity.
+    const credentialsRes = await supertest(api.baseUrl)
+      .get(`/v1/agents/${encodeURIComponent(agent.did)}/credentials`)
+      .set('x-admin-api-key', api.adminApiKey);
+    expect(credentialsRes.statusCode).toBe(200);
+    expect(credentialsRes.body.identity.vcId).toBe(agent.vcId);
+    const attested = (credentialsRes.body.attestations as Array<{ status: string; credential: { credentialSubject: { capability: string } } }>)
+      .map((entry) => [entry.credential.credentialSubject.capability, entry.status])
+      .sort();
+    expect(attested).toEqual([['read:orders', 'active'], ['write:orders', 'active']]);
 
     // No wallet file, no client-held key — the server generated and holds
-    // the agent's private key itself (AgentKey table). The only way to act
-    // as this agent afterward is the server-side sign API.
-    const service = await enrollLiveService(api);
-    const signedVP = await signLiveVP(api, agent.did, { targetService: service.did });
-    expect(signedVP.holder).toBe(agent.did);
-    expect(signedVP.proof).toBeTruthy();
+    // the agent's private key itself (AgentKey table); nothing in the
+    // onboarding exchange carried a private key.
 
     // GET /v1/audit-log returns one page, `{ items, nextCursor }`, each item a
     // `{id, recordedAt, eventDigest, event, ...receipt}` row whose `event` is a
@@ -75,9 +86,8 @@ describe('Onboarding Live Integration', () => {
     expect(auditTypes).toEqual(expect.arrayContaining([
       'credential.required',   // enrollment token generated, onboarding challenge issued
       'credential.verified',   // token consumed, challenge verified, agent onboarded
-      'configuration.changed', // DID created, service enrolled
-      'delegation.issued',     // agent credential issued
-      'proof.generated',       // VP signed
+      'configuration.changed', // DID created
+      'delegation.issued',     // identity credential and capability attestations issued
     ]));
   }, LIVE_HEDERA_TIMEOUT_MS);
 });
