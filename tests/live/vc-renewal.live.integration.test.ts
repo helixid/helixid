@@ -1,18 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import { HelixClient } from '@helixid/sdk-js';
-import type { SignedVC } from '@helixid/sdk-js';
 import {
   LIVE_HEDERA_TIMEOUT_MS,
-  signVPForAgent,
   onboardLiveAgent,
   resetLiveTestDatabase,
   startLiveApi,
   type LiveApi,
 } from '../utils/liveApi.js';
 
-// Renewal here is HelixClient.renewVC() — the server-signed path for a VC the
-// hosted issuer originally signed (which is what onboarding produces).
+// Renewal here is HelixClient.renewVC() on the agent's identity credential
+// (F-1): the hosted issuer re-signs the same agent, name and responsible
+// party with a fresh id and validity. Scopes live in capability
+// attestations and are not part of renewal.
 describe('VC Renewal Live Integration', () => {
   let api: LiveApi;
 
@@ -25,78 +25,61 @@ describe('VC Renewal Live Integration', () => {
     await api?.stop();
   });
 
-  it('issues a fresh VC on renewal and links it back to the one it replaces', async () => {
+  it('issues a fresh identity credential on renewal and links it back to the one it replaces', async () => {
     const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
     const http = supertest(api.baseUrl);
-    const agent = await onboardLiveAgent(api, client, {
+    const agent = await onboardLiveAgent(api, {
       agentName: 'Live Renewal Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-renewal.agent.example.com'],
     });
 
-    try {
-      const renewed = await client.renewVC(agent.vcId, {
-        privilegeScopes: ['read:orders'],
-      });
+    const renewed = await client.renewVC(agent.vcId, {});
 
-      expect(renewed.vcId).not.toBe(agent.vcId);
-      expect((renewed.vc as Record<string, unknown>)['credentialSubject']).toMatchObject({
-        id: agent.did,
-        privilegeScopes: ['read:orders'],
-      });
+    expect(renewed.vcId).not.toBe(agent.vcId);
+    expect(renewed.vcId).toMatch(/^urn:uuid:/);
+    const renewedVc = renewed.vc as Record<string, unknown>;
+    expect(renewedVc['type']).toEqual(expect.arrayContaining(['VerifiableCredential', 'AgentIdentityCredential']));
+    expect(renewedVc['issuer']).toBe(api.issuerDid);
+    expect(renewedVc['credentialSubject']).toMatchObject({
+      id: agent.did,
+      name: 'Live Renewal Agent',
+      responsibleParty: api.issuerDid,
+    });
 
-      const oldVcDetails = await client.getVC(agent.vcId);
-      expect(oldVcDetails.renewedByVcId).toBe(renewed.vcId);
+    const oldVcDetails = await client.getVC(agent.vcId);
+    expect(oldVcDetails.renewedByVcId).toBe(renewed.vcId);
+    // Renewal does not revoke the old identity credential: a separate lineage.
+    expect(oldVcDetails.status).toBe('active');
 
-      // The old VC still verifies with its original (wider) scopes — renewal
-      // doesn't revoke it, it's a separate credential lineage.
-      // Both the original and the renewed credential are active, so each VP
-      // pins the one it is presenting.
-      const oldSignedVP = await signVPForAgent(client, agent.did, {
-        targetService: 'amazon',
-        userDid: 'did:hedera:testnet:live-user-placeholder',
-        vcId: agent.vcId,
-      });
-      const oldVerifyRes = await http.post('/v1/vp/verify').send({ signedVP: oldSignedVP });
-      expect(oldVerifyRes.statusCode).toBe(200);
-      expect(oldVerifyRes.body.privilegeScopes).toEqual(
-        expect.arrayContaining(['read:orders', 'write:orders']),
-      );
-
-      // The new (renewed) VC verifies too, with the narrowed scopes.
-      const newSignedVP = await signVPForAgent(client, agent.did, {
-        targetService: 'amazon',
-        userDid: 'did:hedera:testnet:live-user-placeholder',
-        vcId: renewed.vcId,
-      });
-      const newVerifyRes = await http.post('/v1/vp/verify').send({ signedVP: newSignedVP });
-      expect(newVerifyRes.statusCode).toBe(200);
-      expect(newVerifyRes.body.privilegeScopes).toEqual(['read:orders']);
-    } finally {
-      await agent.cleanup();
-    }
+    // Helix keeps a copy: the listing now leads with the renewed identity, attestations untouched.
+    const credentialsRes = await http
+      .get(`/v1/agents/${encodeURIComponent(agent.did)}/credentials`)
+      .set('x-admin-api-key', api.adminApiKey);
+    expect(credentialsRes.statusCode).toBe(200);
+    expect(credentialsRes.body.identity.vcId).toBe(renewed.vcId);
+    const attested = (credentialsRes.body.attestations as Array<{ credential: { credentialSubject: { capability: string } } }>)
+      .map((entry) => entry.credential.credentialSubject.capability)
+      .sort();
+    expect(attested).toEqual(['read:orders', 'write:orders']);
   }, LIVE_HEDERA_TIMEOUT_MS);
 
-  it('rejects renewing an already-revoked VC', async () => {
+  it('rejects renewing an already-revoked identity credential', async () => {
     const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
     const http = supertest(api.baseUrl);
-    const agent = await onboardLiveAgent(api, client, {
+    const agent = await onboardLiveAgent(api, {
       agentName: 'Live Renewal Revoked Agent',
       requestedScopes: ['read:orders'],
       requestedDomains: ['https://live-renewal-revoked.agent.example.com'],
     });
 
-    try {
-      await http
-        .post(`/v1/vcs/${agent.vcId}/revoke`)
-        .set('x-admin-api-key', api.adminApiKey)
-        .send({});
+    await http
+      .post(`/v1/vcs/${agent.vcId}/revoke`)
+      .set('x-admin-api-key', api.adminApiKey)
+      .send({});
 
-      await expect(client.renewVC(agent.vcId, {})).rejects.toMatchObject({
-        code: 'VC_ALREADY_REVOKED',
-      });
-    } finally {
-      await agent.cleanup();
-    }
+    await expect(client.renewVC(agent.vcId, {})).rejects.toMatchObject({
+      code: 'VC_ALREADY_REVOKED',
+    });
   }, LIVE_HEDERA_TIMEOUT_MS);
 });

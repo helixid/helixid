@@ -18,40 +18,42 @@ import { Redis } from 'ioredis';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import {
+  AesGcmKeyCustody,
+  AgentRepository,
+  agentRoutes,
+  agentKeyRoutes,
+  AgentService,
+  auditLogRoutes,
+  auditRoutes,
   buildDIDDocument,
+  createApiAudit,
+  createApiAuditStorage,
+  createDidCache,
+  createHederaClient,
+  createStatusListCache,
+  CredentialService,
   derivePublicKey,
+  DidKeyRepository,
+  DidRepository,
+  didRoutes,
+  DIDService,
+  EnvSigner,
+  didWebRoutes,
+  errorHandler,
+  extractEd25519PublicKeyHexFromDIDDocument,
   generateKeyPair,
   loadConfigFromEnv,
   resolveDidMethod,
-  errorHandler,
-  ApiAuditLogger,
-  createHederaClient,
-  createDidCache,
-  createStatusListCache,
-  extractEd25519PublicKeyHexFromDIDDocument,
-  DidRepository,
-  VcRepository,
-  AuditLogRepository,
-  AgentRepository,
-  AgentKeyRepository,
-  ServiceRegistryRepository,
-  PreparedPayloadRepository,
-  DIDService,
-  VCService,
-  VPService,
-  AgentService,
-  AesGcmKeyCustody,
-  PreparedPayloadService,
-  SqliteStore,
-  didRoutes,
-  didWebRoutes,
-  vcRoutes,
-  statusListRoutes,
-  vpRoutes,
-  agentRoutes,
-  auditLogRoutes,
+  serviceProviderRoutes,
+  ServiceProviderService,
+  ServiceRepository,
   sessionRoutes,
-  preparedPayloadRoutes,
+  SqliteStore,
+  statusListRoutes,
+  VcRepository,
+  vcRoutes,
+  VCService,
+  verifyRoutes,
   type DIDDocument,
   type RedisLike,
 } from '@helixid/core';
@@ -90,15 +92,18 @@ const redis: RedisLike | null =
     ? new Redis(config.REDIS_URL)
     : null;
 
-const auditLogger = new ApiAuditLogger(prisma, config, sqlite);
+// A-2: every audit event enters through the authoritative recorder.
+const auditDeps = { pool, sqlite };
+const audit = createApiAudit(config, createApiAuditStorage(auditDeps), { deps: auditDeps, baseDir: apiPackageDir });
+// Opens every known ledger: a journal behind the restore witness, or a new
+// recorder key, opens a successor epoch here, before any request is served.
+await audit.recorder.start();
+const auditTrail = audit.trail;
 const didRepository = new DidRepository(prisma, sqlite);
 const vcRepository = new VcRepository(prisma, sqlite);
-const auditLogRepository = new AuditLogRepository(prisma, sqlite);
 const agentRepository = new AgentRepository(prisma, sqlite);
-const agentKeyRepository = new AgentKeyRepository(prisma, sqlite);
-const serviceRegistry = new ServiceRegistryRepository(agentRepository);
-const preparedPayloadRepository = new PreparedPayloadRepository(prisma, sqlite);
-await serviceRegistry.seedBuiltIns();
+const didKeyRepository = new DidKeyRepository(prisma, sqlite);
+const serviceRepository = new ServiceRepository(prisma, sqlite);
 
 await ensureIssuerDidCached();
 
@@ -111,7 +116,7 @@ const jwtSessionKeyPair = generateKeyPair();
 const didService = new DIDService(
   didRepository,
   hederaClient,
-  auditLogger,
+  auditTrail,
   didCache,
   config.DID_CACHE_L1_TTL_SECONDS,
   didMethod,
@@ -120,33 +125,50 @@ const didService = new DIDService(
 const vcService = new VCService(
   vcRepository,
   didService,
-  auditLogger,
+  auditTrail,
   config.HELIX_SIGNING_KEY,
   config.HELIX_ISSUER_DID,
   config.API_BASE_URL,
   statusListCache,
   config.STATUS_LIST_CACHE_L1_TTL_SECONDS,
 );
-const vpService = new VPService(vcService, auditLogger, config.API_BASE_URL, {
-  signingKey: jwtSessionKeyPair.privateKey,
-  issuerDid: config.HELIX_ISSUER_DID,
-  ttlSeconds: config.JWT_SESSION_TTL_SECONDS,
-});
 // Agent self-custody has been retired — every agent's private key is now
 // generated and held here, encrypted with this one shared master key. Unset
 // in dev falls back to a random per-process key (fine for local dev; means
-// encrypted AgentKey rows don't survive a restart in that mode).
+// encrypted DidKey rows don't survive a restart in that mode) — same
+// pattern as HOSTED_ACCESS_TOKEN_SECRET below it.
 const agentKeyEncryptionKey = config.HOSTED_KEY_ENCRYPTION_KEY ?? crypto.randomBytes(32).toString('hex');
 const keyCustody = new AesGcmKeyCustody(agentKeyEncryptionKey);
-const preparedPayloadService = new PreparedPayloadService(preparedPayloadRepository, didService);
+// KYA-OS story F-1: identity, attestations and hops. The Helix issuer signs
+// through an EnvSigner (the key stays in HELIX_SIGNING_KEY); custodial keys
+// sign through the key custody. Copies land in the vcs table for the console.
+const credentialService = new CredentialService(
+  vcRepository,
+  vcService,
+  didService,
+  new EnvSigner({ did: config.HELIX_ISSUER_DID }),
+  didKeyRepository,
+  keyCustody,
+  auditTrail,
+);
 const agentService = new AgentService(
   agentRepository,
   didService,
   vcService,
-  auditLogger,
-  agentKeyRepository,
+  auditTrail,
+  didKeyRepository,
   keyCustody,
-  preparedPayloadService,
+  credentialService,
+);
+
+// Services are custodial too: same master key and custody object as agents.
+const serviceProviderService = new ServiceProviderService(
+  didService,
+  vcService,
+  serviceRepository,
+  didKeyRepository,
+  keyCustody,
+  auditTrail,
 );
 
 const app = Fastify({
@@ -187,6 +209,11 @@ app.get('/health', async () => ({
   storageAdapter,
   database: usingPostgres ? databaseName : usingSqlite ? sqlitePath : 'disabled',
   cacheAdapter,
+  // didMethod/issuerDid: exposed so test harnesses (see
+  // tests/utils/liveApi.ts) can read back the actual resolved issuer DID
+  // instead of duplicating loadConfig()'s did:key/did:web auto-derivation
+  // logic — the issuer DID isn't always known in advance (e.g. did:web's
+  // domain includes a dynamically-chosen port in tests).
   didMethod,
   issuerDid: config.HELIX_ISSUER_DID,
 }));
@@ -231,36 +258,40 @@ await app.register(didWebRoutes, { issuerDid: config.HELIX_ISSUER_DID, didDomain
 await app.register(vcRoutes, {
   prefix: '/v1/vcs',
   vcService,
+  credentialService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
-});
-// vcService is required as of core's grant-persistence change: /grant/finalize
-// now registers the SP-signed consent credential so the platform holds it.
-// Agent self-custody is retired, so there is no agent-side wallet left that
-// could hold it instead.
-await app.register(preparedPayloadRoutes, {
-  prefix: '/v1/vcs',
-  preparedPayloadService,
-  vcService,
 });
 await app.register(statusListRoutes, {
   prefix: '/v1/status-list',
   vcService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
-await app.register(vpRoutes, { prefix: '/v1/vp', vpService });
+// KYA-OS story F-2: the local verifier over HTTP; /v1/vp/verify is retired. It reads no database.
+await app.register(verifyRoutes, { prefix: '/v1/verify', allowLoopbackHttp: config.NODE_ENV !== 'production' });
 await app.register(sessionRoutes, {
   prefix: '/v1/sessions',
   publicKeyHex: jwtSessionKeyPair.publicKey,
 });
 await app.register(auditLogRoutes, {
   prefix: '/v1/audit-log',
-  auditLogRepository,
-  auditLogger,
+  audit,
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+});
+await app.register(auditRoutes, {
+  prefix: '/v1/audit',
+  audit,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
 await app.register(agentRoutes, {
   prefix: '/v1',
   agentService,
+  credentialService,
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+});
+await app.register(agentKeyRoutes, { prefix: '/v1', didRepository, didCache, adminApiKey: config.HELIX_ADMIN_API_KEY });
+await app.register(serviceProviderRoutes, {
+  prefix: '/v1',
+  serviceProviderService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
 
