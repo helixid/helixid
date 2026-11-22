@@ -6,8 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { expect } from 'vitest';
-import { HelixClient } from '@helixid/sdk-js';
-import type { SignedVC, SignedVP } from '@helixid/sdk-js';
+import type { SignedVC } from '@helixid/sdk-js';
 import { createTestPrisma } from './prisma.js';
 
 export const LIVE_HEDERA_TIMEOUT_MS = 240_000;
@@ -38,12 +37,6 @@ export interface LiveApi {
 export interface LiveAgent {
   did: string;
   vcId: string;
-  /**
-   * Retained as a no-op so callers keep their teardown shape. Server custody
-   * creates nothing locally — no wallet file, no temp dir — so there is
-   * genuinely nothing to remove.
-   */
-  cleanup(): Promise<void>;
 }
 
 /**
@@ -64,14 +57,17 @@ export async function resetLiveTestDatabase(): Promise<void> {
   assertTestDatabaseUrl(process.env['DATABASE_URL']);
   const prisma = createTestPrisma();
   await prisma.auditLog.deleteMany();
+  // services and agents came with the service-provider revamp; a service name
+  // is unique per server, so a stale 'amazon' would 409 the next file.
+  await prisma.service.deleteMany();
+  await prisma.agent.deleteMany();
   await prisma.vc.deleteMany();
   await prisma.statusListEntry.deleteMany();
-  await prisma.vpId.deleteMany();
   await prisma.challenge.deleteMany();
   await prisma.enrollmentToken.deleteMany();
-  await prisma.serviceRegistry.deleteMany();
   await prisma.didUpdate.deleteMany();
   await prisma.did.deleteMany();
+  await prisma.didKey.deleteMany();
   await prisma.$disconnect();
 }
 
@@ -186,9 +182,14 @@ export async function startLiveApi(): Promise<LiveApi> {
   };
 }
 
+/**
+ * Onboards an agent through the real single-call, server-custody flow —
+ * agent self-custody (client-generated keypair, wallet file, passphrase)
+ * has been retired. The server generates and holds the private key; the
+ * only handle a caller gets back is the DID.
+ */
 export async function onboardLiveAgent(
   api: LiveApi,
-  client: HelixClient,
   options: {
     agentName: string;
     requestedScopes: string[];
@@ -209,31 +210,55 @@ export async function onboardLiveAgent(
   expect(tokenRes.status).toBe(201);
   const { token } = (await tokenRes.json()) as { token: string };
 
-  // Server custody: the API generates and holds the agent's key. Nothing
-  // local is created, so there is nothing to clean up either.
-  const { agentDid, vcId } = await client.onboardAgent(token, options.requestedDomains);
+  const onboardRes = await fetch(`${api.baseUrl}/v1/onboard`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enrollmentToken: token, domains: options.requestedDomains }),
+  });
+  expect(onboardRes.status).toBe(201);
+  const onboarding = (await onboardRes.json()) as { agentDid: string; vcId: string };
 
-  return { did: agentDid, vcId, cleanup: async () => {} };
+  return { did: onboarding.agentDid, vcId: onboarding.vcId };
 }
 
 /**
- * Asks the API to sign a VP on a server-custody agent's behalf.
- *
- * Replaces the old local VPBuilder path: with agent self-custody retired the
- * caller never has the agent's key, so signing is an API call. The server
- * looks up the agent's own authority VC itself — only a consent grant, which
- * is not secret material, is passed in.
+ * Enrolls a service (POST /v1/services) and returns its DID. A VP names its
+ * targetService by DID, and the platform mints and holds the service's key,
+ * so a live test registers a real service rather than naming one. Names are
+ * unique per server, so a file with several tests enrolls once in beforeAll.
  */
-export async function signVPForAgent(
-  client: HelixClient,
-  agentDid: string,
-  options: { targetService: string; userDid?: string; grantVC?: SignedVC; vcId?: string },
-): Promise<SignedVP> {
-  return client.signVP(agentDid, options.targetService, {
-    ...(options.userDid !== undefined ? { userDid: options.userDid } : {}),
-    ...(options.grantVC !== undefined ? { grantVC: options.grantVC } : {}),
-    ...(options.vcId !== undefined ? { vcId: options.vcId } : {}),
+export async function enrollLiveService(api: LiveApi, name = 'amazon'): Promise<{ did: string; name: string }> {
+  const res = await fetch(`${api.baseUrl}/v1/services`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': api.adminApiKey },
+    body: JSON.stringify({
+      name,
+      domain: `${name}.example.com`,
+      requiredScopes: ['read:orders', 'write:orders'],
+    }),
   });
+  expect(res.status).toBe(201);
+  const record = (await res.json()) as { did: string; name: string };
+  return { did: record.did, name: record.name };
+}
+
+/**
+ * A user's consent for an agent, issued by the service through
+ * POST /v1/service-delegation-grants. signVP with a userDid refuses without
+ * one, so any test that signs on a user's behalf issues it first.
+ */
+export async function issueLiveGrant(
+  api: LiveApi,
+  input: { serviceDid: string; agentDid: string; userDid: string; scopes: string[] },
+): Promise<SignedVC> {
+  const res = await fetch(`${api.baseUrl}/v1/service-delegation-grants`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': api.adminApiKey },
+    body: JSON.stringify({ ...input, durability: 'standing' }),
+  });
+  expect(res.status).toBe(201);
+  const { grantVC } = (await res.json()) as { grantVC: SignedVC };
+  return grantVC;
 }
 
 async function getAvailablePort(): Promise<number> {

@@ -53,19 +53,30 @@ model Vc {
   vcJson           Json
   privilegeScopes  Json?
   statusListIndex  Int
-  expiresAt        DateTime
+  expiresAt        DateTime?
   revokedAt        DateTime?
   renewedByVcId    String?
   delegatedFrom    String?
   delegationDepth  Int?
   maxDelegationDepth Int?
   parentVcId       String?
+  // Lookup columns, denormalised from vcJson so a credential can be found
+  // without reading every row's JSON: the credential's own type (the entry
+  // of `type` that is not VerifiableCredential), who signed it, the user it
+  // was granted on behalf of (DelegationGrantCredential only) and the
+  // canonical scope set (sorted, space-joined). A consent grant is one of
+  // (userDid, subjectDid, issuerDid, scopeKey): same four, same grant.
+  vcType           String?
+  issuerDid        String?
+  userDid          String?
+  scopeKey         String?
   createdAt        DateTime  @default(now())
   did              Did       @relation(fields: [subjectDid], references: [id])
 
   @@index([subjectDid])
   @@index([vcId])
   @@index([parentVcId])
+  @@index([subjectDid, vcType, issuerDid, userDid])
   @@map("vcs")
 }
 
@@ -79,39 +90,19 @@ model StatusListEntry {
   @@map("status_list_entries")
 }
 
-model VpId {
-  id            String   @id @default(cuid())
-  vpId          String   @unique
-  agentDid      String
-  userDid       String
-  targetService String
-  expiresAt     DateTime
-  consumedAt    DateTime?
-  createdAt     DateTime @default(now())
-
-  @@index([vpId])
-  @@map("vp_ids")
-}
-
-/// Server-held agent private keys. Agent self-custody is retired: the server
-/// generates the keypair at onboarding and stores the private key encrypted
-/// here, so this table is what makes POST /v1/onboard and the custodial
-/// signing routes work at all.
-///
-/// Mirrors @helixid/core's own AgentKey model — core owns the services that
-/// read and write it (AgentKeyRepository / AesGcmKeyCustody), and this schema
-/// has to declare the same table for the Postgres adapter, which builds its
-/// schema from these migrations rather than from core's.
-model AgentKey {
+// Custody-held private keys for every kind of DID the platform signs for
+// (agent, service, issuer, user). Nobody holds their own key.
+model DidKey {
   id                  String   @id @default(cuid())
   did                 String   @unique
+  subjectType         String   @default("agent")
   encryptedPrivateKey String
   iv                  String
   authTag             String
   algorithm           String
   createdAt           DateTime @default(now())
 
-  @@map("agent_keys")
+  @@map("did_keys")
 }
 
 model EnrollmentToken {
@@ -121,7 +112,7 @@ model EnrollmentToken {
   requestedScopes  String
   requestedDomains String
   maxDelegationDepth Int         @default(0)
-  expiresAt        DateTime
+  expiresAt        DateTime?
   usedAt           DateTime?
   createdAt        DateTime    @default(now())
   challenges       Challenge[]
@@ -148,40 +139,48 @@ model Challenge {
   @@map("challenges")
 }
 
-model PreparedPayload {
-  id                String    @id @default(cuid())
-  token             String    @unique
-  // 'delegation' | 'grant' — see docs/proposal-sdk-api-only.md. One purpose
-  // per row; the finalize endpoint for a given purpose rejects tokens
-  // prepared for a different one (PreparedPayloadPurposeMismatchError).
-  purpose           String
-  // Canonical JSON of the unsigned VC skeleton (no `proof` field). This is
-  // exactly what hashCanonicalPayload() was run over to produce canonicalHash.
-  unsignedPayload    String
-  canonicalHash      String
-  // DID whose signature finalize() must accept over canonicalHash. Prevents
-  // a captured prepare response from being finalized with a different key.
-  expectedSignerDid  String
-  expiresAt          DateTime
-  consumedAt         DateTime?
-  createdAt          DateTime  @default(now())
+// Enrolled Service Providers: the identity side (the DID) of a service. Its
+// private key is in did_keys (subjectType 'service'); the VP-target lookup
+// by name stays in service_registry. A hosted build attributes rows to
+// accounts with its own link table rather than a column here.
+model Service {
+  id            String    @id
+  did           String    @unique
+  name          String
+  domain        String
+  requiredScope String
+  description   String?
+  // Free-form label ('express', 'flask', ...): recorded as given, never
+  // used to select behaviour.
+  framework     String?
+  createdAt     DateTime  @default(now())
+  revokedAt     DateTime?
 
-  @@map("prepared_payloads")
+  @@index([name])
+  @@map("services")
 }
 
-model ServiceRegistry {
-  id                 String   @id @default(cuid())
-  serviceName        String   @unique
-  displayName        String
-  verifiedDomain     String
-  publicKeyMultibase String
-  apiEndpoint        String
-  metadata           String
-  active             Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+// Onboarded agents as records: the name an agent was onboarded with, its
+// owner-controlled visibility, and what is known about its own onboarding
+// credential (kept here so a registry can filter and page on status without
+// reading `vcs`). Keyed by the agent DID. A hosted build attributes rows to
+// accounts with its own link table rather than a column here, as for services.
+model Agent {
+  did                 String    @id
+  name                String?
+  // 'private' | 'public'. Nothing becomes public by default or by migration.
+  visibility          String    @default("private")
+  visibilityChangedAt DateTime?
+  publishedAt         DateTime?
+  credentialVcId      String?
+  credentialExpiresAt DateTime?
+  revokedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  @@map("service_registry")
+  @@index([visibility, publishedAt])
+  @@index([credentialVcId])
+  @@map("agents")
 }
 
 model AuditLog {
