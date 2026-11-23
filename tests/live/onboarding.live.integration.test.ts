@@ -8,6 +8,7 @@ import {
   startLiveApi,
   type LiveApi,
 } from '../utils/liveApi.js';
+import { defaultKidFragment } from '@helixid/core';
 
 describe('Onboarding Live Integration', () => {
   let api: LiveApi;
@@ -58,7 +59,8 @@ describe('Onboarding Live Integration', () => {
     expect((identity['proof'] as { type: string; cryptosuite: string; verificationMethod: string })).toMatchObject({
       type: 'DataIntegrityProof',
       cryptosuite: 'eddsa-jcs-2022',
-      verificationMethod: `${api.issuerDid}#key-1`,
+      // A did:key issuer signs as its W3C method id (defaultKidFragment).
+      verificationMethod: `${api.issuerDid}#${defaultKidFragment(String(api.issuerDid))}`,
     });
 
     // One capability attestation per requested scope, kept by Helix next to the identity.
