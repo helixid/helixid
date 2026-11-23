@@ -183,15 +183,103 @@ model Agent {
   @@map("agents")
 }
 
-model AuditLog {
-  id          String   @id @default(cuid())
-  timestamp   DateTime @default(now())
-  eventType   String
-  requestId   String
-  payloadJson String
-  createdAt   DateTime @default(now())
+/// KYA-OS audit ledgers (story A-2, AAP-2 Chained): one per tenant.
+/// `tenantKey` is the RFC 8785 text of `tenantRef`. Never deleted (trigger).
+model AuditLedger {
+  ledgerId      String   @id
+  tenantKey     String   @unique
+  tenantRef     Json
+  activeEpochId String?
+  createdAt     DateTime @default(now())
 
-  @@index([eventType])
-  @@index([requestId])
-  @@map("audit_log")
+  @@map("audit_ledgers")
+}
+
+/// The ledger-head row: one per epoch, its committed head, its one recorder
+/// authority and, once closed, its seal. Triggers let a head only advance by
+/// one onto a stored entry or be sealed once; never deleted.
+model AuditLedgerHead {
+  ledgerId         String
+  ledgerEpochId    String
+  position         BigInt    @unique @default(autoincrement())
+  sequence         BigInt
+  entryDigest      String
+  recorderDid      String
+  recorderKid      String
+  recorderAlg      String
+  status           String    @default("active")
+  terminalDigest   String?
+  sealReason       String?
+  successorEpochId String?
+  sealedAt         DateTime?
+  openedAt         DateTime  @default(now())
+
+  @@id([ledgerId, ledgerEpochId])
+  @@map("audit_ledger_heads")
+}
+
+/// The atomic journal. Append-only: no update or delete path in code, and
+/// triggers refuse UPDATE, DELETE, TRUNCATE and any insert that is not the
+/// next entry of an active epoch. `entry` is the RFC 8785 text of the signed
+/// entry; the other columns index it. Retained indefinitely.
+model AuditJournalEntry {
+  id                  BigInt   @id @default(autoincrement())
+  ledgerId            String
+  ledgerEpochId       String
+  sequence            BigInt
+  idempotencyKey      String
+  eventId             String
+  sourceId            String
+  eventType           String
+  family              String
+  eventDigest         String
+  entryDigest         String
+  previousEntryDigest String?
+  recordedAt          BigInt
+  correlationId       String?
+  entry               String
+  insertedAt          DateTime @default(now())
+
+  @@unique([ledgerId, ledgerEpochId, sequence])
+  @@unique([ledgerId, idempotencyKey])
+  @@index([eventType, recordedAt])
+  @@index([family, recordedAt])
+  @@index([correlationId])
+  @@index([recordedAt])
+  @@map("audit_journal_entries")
+}
+
+/// Legal holds: applied once, released once, never deleted (trigger).
+model AuditLegalHold {
+  holdId     String    @id
+  ledgerId   String
+  targetKind String
+  objectId   String?
+  target     Json
+  appliedAt  DateTime
+  appliedBy  String
+  releasedAt DateTime?
+  releasedBy String?
+
+  @@index([ledgerId])
+  @@index([objectId])
+  @@map("audit_legal_holds")
+}
+
+/// The evidence vault: AES-256-GCM objects an event refers to by `EvidenceRef`.
+/// The ciphertext is opaque without the key and the tenant-bound AAD. Disposal
+/// (A-2) clears the ciphertext and keeps the reference; nothing else changes.
+model AuditEvidence {
+  objectId         String    @id
+  ciphertextDigest String
+  size             BigInt
+  mediaType        String
+  keyId            String
+  ref              Json
+  ciphertext       Bytes?
+  storedAt         DateTime  @default(now())
+  disposedAt       DateTime?
+  disposalReason   String?
+
+  @@map("audit_evidence")
 }

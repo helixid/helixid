@@ -76,16 +76,18 @@ describe('Onboarding Live Integration', () => {
     // the agent's private key itself (AgentKey table); nothing in the
     // onboarding exchange carried a private key.
 
-    const auditLog = await client.getAuditLog({ limit: 100 });
-    const auditTypes = auditLog.map((entry) => entry.eventType);
+    // GET /v1/audit-log returns one page, `{ items, nextCursor }`, each item a
+    // `{id, recordedAt, eventDigest, event, ...receipt}` row whose `event` is a
+    // typed producer event (stories A-1, A-2).
+    const auditLog = (await client.getAuditLog({ limit: 100 })) as unknown as {
+      items: Array<{ event: { eventType: string } }>;
+    };
+    const auditTypes = auditLog.items.map((entry) => entry.event.eventType);
     expect(auditTypes).toEqual(expect.arrayContaining([
-      'ENROLLMENT_TOKEN_GENERATED',
-      'ENROLLMENT_TOKEN_CONSUMED',
-      'CHALLENGE_ISSUED',
-      'CHALLENGE_VERIFIED',
-      'DID_CREATED',
-      'VC_ISSUED',
-      'AGENT_ONBOARDED',
+      'credential.required',   // enrollment token generated, onboarding challenge issued
+      'credential.verified',   // token consumed, challenge verified, agent onboarded
+      'configuration.changed', // DID created
+      'delegation.issued',     // identity credential and capability attestations issued
     ]));
   }, LIVE_HEDERA_TIMEOUT_MS);
 });
