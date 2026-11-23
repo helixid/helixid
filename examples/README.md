@@ -102,61 +102,36 @@ SDK packages are installed as git dependencies, which run nested installs and
 pull a lot over the network; a flaky connection fails the build. Re-run
 `docker compose up --build` — it resumes from cached layers.
 
-## Scripts (local API)
+## Script (local API): a KYA-OS request proof, end to end
 
-Start the API first:
+Start the API first (outside production it reads DID documents and status
+lists over http on loopback):
 
 ```sh
 set -a; source .env; set +a
 pnpm --filter @helixid/api start
 ```
 
-Verifier examples now mint fresh credentials and sign fresh VPs automatically (no fixture file needed).
-
-Then run:
+Then, with the same `HELIX_ADMIN_API_KEY`:
 
 ```sh
-pnpm example:verify-vp
-pnpm example:verify-vp:sdk
-pnpm example:verify-vp:session-bridge
-pnpm example:scope-check
-pnpm example:self-verify
-pnpm example:revocation-check
+pnpm example:request-proof
 ```
 
-## Verifier fast-path patterns (both supported)
+[`request-proof.ts`](./request-proof.ts) needs no LLM and no Docker. It
+registers a service, creates a self-custody agent (`POST /v1/agents`) and runs
+`helix init` for it, so the agent's key is generated locally and only its
+public half reaches helixid. It roots the agent's authority over the service
+with one delegation hop (`POST /v1/grants`), has the agent sign a KYA-OS
+request proof for one tool call with its own key, and verifies it through
+`POST /v1/verify` with live status reads, accepting only an L3 verdict. Then it
+shows the refusals a verifier must make: an action the chain does not allow
+(`action_not_delegated`), the same proof again (`nonce_replayed`), and a call
+after the root hop was revoked (`status_revoked`).
 
-### Path A — Verifier-issued JWT session
-
-```sh
-JWT_SECRET=replace-with-a-strong-secret \
-pnpm --filter @helixid/api exec tsx ../examples/verifier-session-cycle.ts
-```
-
-Flow: verify VP once → issue verifier-owned JWT → subsequent calls verify JWT locally until TTL expiry.
-
-### Path B — VP-result caching (no JWT)
-
-```sh
-pnpm --filter @helixid/api exec tsx ../examples/verifier-vp-cache-cycle.ts
-```
-
-Flow: verify VP once → cache verification result by `vpId` with TTL → subsequent calls with same `vpId` are cache hits.
-
-In both paths, the verifier owns policy/infrastructure decisions (scope checks, replay/cache store, TTLs, headers, and secrets).
-
-`verify-vp` creates a fresh VP and verifies it via `/v1/vp/verify`.
-
-`verify-vp:sdk` creates a fresh VP and verifies it locally (no `/v1/vp/verify` call).
-
-`verify-vp:session-bridge` creates a fresh VP, calls `/v1/vp/verify` with `session: true`, and verifies the returned JWT using `/v1/sessions/public-key`.
-
-`verify-vp-session-bridge` uses `HELIX_API_URL` (or `API_BASE_URL`) as-is for API calls.
-`verify-vp:sdk` performs local verification and still fetches DID/status resources referenced by the credential as needed.
-
-`scope-check` is the authorization-only subset (scope + target-service checks on an already verified, active payload).
-
-`revocation-check` is self-contained: it onboards a fresh credential, revokes it, verifies the status bit flip, then onboards a replacement credential.
+It replaces the VP-era scripts (`verify-vp*`, `self-verify`, `scope-check`,
+`revocation-check`, `verifier-*`, `delegation-demo`): `/v1/vp/verify`, `signVP`,
+VP sessions and `delegateAuthority` are retired with no backward compatibility.
 
 ## Real Framework Middleware
 
