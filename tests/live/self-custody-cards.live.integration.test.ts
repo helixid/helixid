@@ -53,6 +53,8 @@ describe('Self-custody onboarding and hosted cards Live Integration', () => {
     expect(challenge.status, JSON.stringify(challenge.body)).toBe(200);
     const { did, kid, nonce } = challenge.body as { did: string; kid: string; nonce: string };
     expect(did).toBe(created.body['did']);
+    // One did:web shape (2026-11-23): did:web:<domain>:agents:<hex>, no org segment.
+    expect(did).toMatch(/^did:web:[^:]+:agents:[0-9a-f]{32}$/);
 
     // The key is generated here, on the agent's side; only the public JWK leaves.
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');

@@ -8,6 +8,7 @@ import {
   startLiveApi,
   type LiveApi,
 } from '../utils/liveApi.js';
+import { defaultKidFragment } from '@helixid/core';
 
 describe('Onboarding Live Integration', () => {
   let api: LiveApi;
@@ -37,7 +38,7 @@ describe('Onboarding Live Integration', () => {
     // F-1: the onboarding VC is the agent's identity credential, id urn:uuid:<v4>.
     expect(agent.vcId).toMatch(/^urn:uuid:/);
 
-    const didRes = await supertest(api.baseUrl).get(`/v1/dids/${agent.did}`);
+    const didRes = await supertest(api.baseUrl).get(`/v1/dids/${encodeURIComponent(agent.did)}`);
     expect(didRes.statusCode).toBe(200);
     expect(didRes.body.id).toBe(agent.did);
     expect(didRes.body.service[0].serviceEndpoint).toBe('https://live-onboarding.agent.example.com');
@@ -58,7 +59,8 @@ describe('Onboarding Live Integration', () => {
     expect((identity['proof'] as { type: string; cryptosuite: string; verificationMethod: string })).toMatchObject({
       type: 'DataIntegrityProof',
       cryptosuite: 'eddsa-jcs-2022',
-      verificationMethod: `${api.issuerDid}#key-1`,
+      // A did:key issuer signs as its W3C method id (defaultKidFragment).
+      verificationMethod: `${api.issuerDid}#${defaultKidFragment(String(api.issuerDid))}`,
     });
 
     // One capability attestation per requested scope, kept by Helix next to the identity.
