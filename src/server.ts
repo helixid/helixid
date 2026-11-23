@@ -401,6 +401,8 @@ await app.register(custodyRoutes, {
   authorize: selfCustodyAuthorize(config.HELIX_ADMIN_API_KEY),
   // A POST /v1/agents body with enrollmentToken is story F-1's token onboarding, unchanged.
   enrollmentOnboarding: enrollmentOnboardingHandler(agentService),
+  // KYA-OS story C-E point 5: an ancestor issuer of an agent's delegations may revoke its compromised key.
+  keyRevocations: revocationService,
 });
 // KYA-OS story C-A: /{path}/did.json, /{path}/card.json and /.well-known/kya-os-card.json; after the static routes, so the wildcard never shadows them.
 await app.register(entityCardRoutes, { source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, details: (did) => custodyService.cardDetails(did), credentials: credentialCardDetails(vcService) }) });
