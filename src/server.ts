@@ -250,6 +250,10 @@ const custodyService = new CustodyService({
   didCache,
   recheck: custodyRecheckSettings(config),
   credentialDetails: credentialCardDetails(vcService),
+  // KYA-OS story C-E: a self-custody agent rotates its key with the SDK's rotateKey();
+  // both keys stay listed for KEY_ROTATION_OVERLAP_SECONDS, and its leaf hops are reissued.
+  rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
+  hopReissuer: credentialService,
 });
 // Own-hosted agents waiting for their documents are re-checked in the background.
 const custodyRecheck = new CustodyRecheckScheduler(custodyService, { tickSeconds: config.CUSTODY_RECHECK_TICK_SECONDS });
