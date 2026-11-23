@@ -262,6 +262,10 @@ const custodyService = new CustodyService({
   didCache,
   recheck: custodyRecheckSettings(config),
   credentialDetails: credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did) }),
+  // KYA-OS story C-E: a self-custody agent rotates its key with the SDK's rotateKey();
+  // both keys stay listed for KEY_ROTATION_OVERLAP_SECONDS, and its leaf hops are reissued.
+  rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
+  hopReissuer: credentialService,
 });
 // KYA-OS story L3-H: the user's pairwise did:key, which signs the root of a consent chain on the
 // user's click, is the one key helixid holds (the consent key is always Helix-held; agents and
@@ -440,6 +444,8 @@ await app.register(custodyRoutes, {
   authorize: selfCustodyAuthorize(config.HELIX_ADMIN_API_KEY),
   // A POST /v1/agents body with enrollmentToken is story F-1's token onboarding, unchanged.
   enrollmentOnboarding: enrollmentOnboardingHandler(agentService),
+  // KYA-OS story C-E point 5: an ancestor issuer of an agent's delegations may revoke its compromised key.
+  keyRevocations: revocationService,
 });
 // KYA-OS story L3-H: consent requests, the consent page at authorizationUrl, renewal, withdrawal.
 await app.register(consentRoutes, {
