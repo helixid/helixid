@@ -37,7 +37,7 @@ describe('Onboarding Live Integration', () => {
     // F-1: the onboarding VC is the agent's identity credential, id urn:uuid:<v4>.
     expect(agent.vcId).toMatch(/^urn:uuid:/);
 
-    const didRes = await supertest(api.baseUrl).get(`/v1/dids/${agent.did}`);
+    const didRes = await supertest(api.baseUrl).get(`/v1/dids/${encodeURIComponent(agent.did)}`);
     expect(didRes.statusCode).toBe(200);
     expect(didRes.body.id).toBe(agent.did);
     expect(didRes.body.service[0].serviceEndpoint).toBe('https://live-onboarding.agent.example.com');

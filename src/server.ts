@@ -31,6 +31,9 @@ import {
   createHederaClient,
   createStatusListCache,
   CredentialService,
+  createEntityCardSource,
+  credentialCardDetails,
+  entityCardRoutes,
   derivePublicKey,
   DidKeyRepository,
   DidRepository,
@@ -357,6 +360,13 @@ await app.register(serviceProviderRoutes, {
   prefix: '/v1',
   serviceProviderService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
+});
+// Agent and service did:webs (did:web:<DID_DOMAIN>:agents:<hex>,
+// :services:<hex>; one did:web shape, 2026-11-23) and their cards at
+// /<kind>/<hex>/did.json and card.json. Registered last: its wildcard has the
+// lowest priority, so every route above keeps its own path.
+await app.register(entityCardRoutes, {
+  source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, credentials: credentialCardDetails(vcService) }),
 });
 
 const shutdown = async (): Promise<void> => {
