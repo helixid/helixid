@@ -228,6 +228,10 @@ const app = Fastify({
     redact: ['req.headers.authorization', 'req.body.privateKey', 'req.body.privateKeyHex'],
   },
   genReqId: () => `req_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`,
+  // KYA-OS story L3-C: a per-issuer status list's id is `iss-` + base64url(issuer DID), and a hosted
+  // did:web makes it longer than Fastify's default 100-character route parameter (414). 2048 holds
+  // the id of any DID a URL can carry.
+  routerOptions: { maxParamLength: 2048 },
 });
 
 app.addSchema({

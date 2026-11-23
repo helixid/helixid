@@ -101,6 +101,22 @@ describe('Revocation Live Integration (L3-C)', () => {
     expect(kyaos.verifier.readStatusBit(read.bits, Number(status.statusListIndex))).toBe(0);
   }, LIVE_HEDERA_TIMEOUT_MS);
 
+  it('serves the status list of an issuer whose list id is longer than 100 characters', async () => {
+    // A hosted agent's did:web makes `iss-` + base64url(DID) longer than Fastify's default route parameter.
+    const issuer = `did:web:helix.example.com:accounts:${'a1b2c3d4'.repeat(4)}:agents:${'shopping-assistant-'.repeat(3)}x`;
+    const entry = await supertest(api.baseUrl).post('/v1/status-list/entries').set('x-admin-api-key', api.adminApiKey).send({ issuer });
+    expect(entry.statusCode).toBe(201);
+    const listId = (entry.body.statusListCredential as string).split('/v1/status-list/')[1]!;
+    expect(listId.length).toBeGreaterThan(100);
+    // The route runs (not 414): Helix holds no key for this issuer, so its list waits for the issuer's signature.
+    const served = await supertest(api.baseUrl).get(`/v1/status-list/${listId}`);
+    expect(served.statusCode).toBe(503);
+    expect(served.body.error.code).toBe('STATUS_LIST_UNSIGNED');
+    const unsigned = await supertest(api.baseUrl).get(`/v1/status-list/${listId}/unsigned`);
+    expect(unsigned.statusCode).toBe(200);
+    expect(unsigned.body.issuer).toBe(issuer);
+  });
+
   it('revokes a root hop and every hop below it in one request, flips each bit on its issuer list, and signals each one', async () => {
     const service = await enrollLiveService(api, 'live-revocation-service');
     const parent = await onboardLiveAgent(api, {
