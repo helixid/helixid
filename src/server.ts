@@ -21,6 +21,7 @@ import {
   AesGcmKeyCustody,
   AgentRepository,
   agentRoutes,
+  enrollmentOnboardingHandler,
   AgentService,
   auditLogRoutes,
   auditRoutes,
@@ -31,9 +32,13 @@ import {
   createHederaClient,
   createStatusListCache,
   CredentialService,
-  createEntityCardSource,
   credentialCardDetails,
-  entityCardRoutes,
+  createEntityCardSource,
+  CustodyRecheckScheduler,
+  custodyRecheckSettings,
+  CustodyRepository,
+  custodyRoutes,
+  CustodyService,
   derivePublicKey,
   DidKeyRepository,
   DidRepository,
@@ -42,6 +47,7 @@ import {
   EnvSigner,
   didWebRoutes,
   errorHandler,
+  entityCardRoutes,
   eventRoutes,
   extractEd25519PublicKeyHexFromDIDDocument,
   generateKeyPair,
@@ -71,6 +77,7 @@ import {
   type RedisPubSubLike,
   type Signer,
 } from '@helixid/core';
+import { SelfCustodyOnlyKeyStore, selfCustodyAuthorize } from './self-custody.js';
 
 const config = loadConfigFromEnv();
 const storageAdapter =
@@ -225,6 +232,28 @@ const serviceProviderService = new ServiceProviderService(
   auditTrail,
 );
 
+// KYA-OS stories F-3 and C-A on the open-source server: Helix-hosted agents
+// with their DID documents and Entity Cards, self-custody only. The agent
+// generates and holds its key (helix init / helix activate); Helix learns only
+// the public JWK. So there is no DbKeyStore here: the custody service gets a
+// KeyStore that holds nothing, the custody routes refuse keyCustody 'helix'
+// and /sign (see self-custody.ts), and no grant, hop or status list is signed
+// with a custodial key.
+const custodyService = new CustodyService({
+  records: new CustodyRepository(prisma, sqlite),
+  keyStore: new SelfCustodyOnlyKeyStore(),
+  didRepository,
+  credentials: credentialService,
+  services: serviceRepository,
+  auditTrail,
+  host: config.DID_DOMAIN,
+  didCache,
+  recheck: custodyRecheckSettings(config),
+  credentialDetails: credentialCardDetails(vcService),
+});
+// Own-hosted agents waiting for their documents are re-checked in the background.
+const custodyRecheck = new CustodyRecheckScheduler(custodyService, { tickSeconds: config.CUSTODY_RECHECK_TICK_SECONDS });
+
 const app = Fastify({
   logger: {
     level: config.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -354,24 +383,28 @@ await app.register(agentRoutes, {
   agentService,
   credentialService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
+  // KYA-OS story F-3: the custody routes own POST /v1/agents.
+  createAgentRoute: false,
 });
-// KYA-OS story F-3 removed POST /v1/agents/:did/keys (core's agentKeyRoutes); custody keys live behind core's custody routes.
 await app.register(serviceProviderRoutes, {
   prefix: '/v1',
   serviceProviderService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
-// Agent and service did:webs (did:web:<DID_DOMAIN>:agents:<hex>,
-// :services:<hex>; one did:web shape, 2026-11-23) and their cards at
-// /<kind>/<hex>/did.json and card.json. Registered last: its wildcard has the
-// lowest priority, so every route above keeps its own path.
-await app.register(entityCardRoutes, {
-  source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, credentials: credentialCardDetails(vcService) }),
+await app.register(custodyRoutes, {
+  prefix: '/v1',
+  custodyService,
+  authorize: selfCustodyAuthorize(config.HELIX_ADMIN_API_KEY),
+  // A POST /v1/agents body with enrollmentToken is story F-1's token onboarding, unchanged.
+  enrollmentOnboarding: enrollmentOnboardingHandler(agentService),
 });
+// KYA-OS story C-A: /{path}/did.json, /{path}/card.json and /.well-known/kya-os-card.json; after the static routes, so the wildcard never shadows them.
+await app.register(entityCardRoutes, { source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, details: (did) => custodyService.cardDetails(did), credentials: credentialCardDetails(vcService) }) });
 
 const shutdown = async (): Promise<void> => {
   app.log.info('Helix ID API shutting down...');
   await app.close();
+  await custodyRecheck.stop();
   statusListPublisher.stopRefresh();
   await revocationSignals.close();
   (redis as Redis | null)?.disconnect();
@@ -386,6 +419,7 @@ process.on('SIGINT', () => void shutdown());
 const start = async (): Promise<void> => {
   try {
     await app.listen({ port: config.PORT, host: '0.0.0.0' });
+    if (config.CUSTODY_RECHECK_ENABLED) custodyRecheck.start();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

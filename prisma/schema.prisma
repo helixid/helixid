@@ -283,3 +283,91 @@ model AuditEvidence {
 
   @@map("audit_evidence")
 }
+
+// KYA-OS story F-3: the custody choice of one agent, service or owner, keyed
+// by its DID. keyCustody 'self' (the key is held client side) | 'helix' (in
+// the KeyStore); didHosting 'own' (did:web on the owner's domain) | 'helix'
+// (did:web under the Helix domain). status 'pending_key' (self-custody,
+// waiting for `helix init`), 'pending_resolution' (own hosting, waiting for
+// the documents to resolve from the owner's domain) or 'active'. A
+// self-custody enrollment token is kept as its sha256 only.
+model CustodyRecord {
+  did                 String       @id
+  subjectType         String
+  keyCustody          String
+  didHosting          String
+  status              String
+  kid                 String?
+  name                String?
+  ownerDid            String?
+  scopes              Json?
+  // What the agent-create route took on the enrollment token: the domains
+  // published as the DID document's LinkedDomains entries (#domain-N), and
+  // the maxDelegationDepth written on the identity credential.
+  requestedDomains    Json?
+  maxDelegationDepth  Int          @default(0)
+  enrollmentTokenHash String?      @unique
+  enrollmentExpiresAt DateTime?
+  enrollmentNonce     String?
+  enrollmentUsedAt    DateTime?
+  credentialVcId      String?
+  activatedAt         DateTime?
+  // Own hosting: the background re-check of a subject waiting for its
+  // documents (pending_resolution): since when it waits, how many checks it
+  // had (the backoff), and when the next one is due (null: none scheduled).
+  pendingResolutionSince DateTime?
+  recheckAttempts     Int          @default(0)
+  nextRecheckAt       DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  keys                CustodyKey[]
+
+  @@index([subjectType, keyCustody])
+  @@index([status, nextRecheckAt])
+  @@map("custody_records")
+}
+
+// Every key a custody subject has had, public half only: where it is held
+// ('self' | 'helix'), and its rotation state ('active', 'retiring' during the
+// overlap after a custody change, 'revoked'). The DID document lists the
+// active and retiring keys.
+model CustodyKey {
+  id           String        @id @default(cuid())
+  did          String
+  kid          String
+  location     String
+  publicKeyJwk Json
+  status       String
+  sequence     Int
+  createdAt    DateTime      @default(now())
+  retiresAt    DateTime?
+  revokedAt    DateTime?
+  record       CustodyRecord @relation(fields: [did], references: [did])
+
+  @@unique([did, kid])
+  @@map("custody_keys")
+}
+
+// KYA-OS story F-3, Helix-side key storage: the private keys Helix holds
+// (custodial agents, services and owners; L3-H consent did:keys), each
+// wrapped with AES-256-GCM under the key-encryption key named by kekId, the
+// row's did, kid and subjectType bound in as associated data. Read and
+// written only by DbKeyStore (stories rule 8). Shredding empties ciphertext
+// and nonce and stamps shreddedAt; the public half stays for the record.
+model WrappedKey {
+  id           String    @id @default(cuid())
+  did          String
+  kid          String
+  subjectType  String
+  algorithm    String
+  kekId        String
+  nonce        String
+  ciphertext   String
+  publicKeyJwk Json
+  createdAt    DateTime  @default(now())
+  shreddedAt   DateTime?
+
+  @@unique([did, kid])
+  @@index([did])
+  @@map("wrapped_keys")
+}
