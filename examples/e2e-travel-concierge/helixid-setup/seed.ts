@@ -1,20 +1,23 @@
 // helixid-setup — the run-once seeder.
 //
-// Mental model: this is a migration, not a service. It runs, enrolls the initial
-// Concierge agent against the live HelixID API, records it in the persona
-// manifest on the shared volume, and exits 0 so docker-compose starts the MCP
-// server and agent that depend on it.
+// Mental model: this is a migration, not a service. It runs, enrolls the MCP
+// service (self custody: its key is written to the shared volume, HelixID hosts
+// its did:web) and the initial Concierge agent (self custody: helix init
+// generates its key here), records the agent in the persona manifest, and
+// exits 0 so docker-compose starts the MCP server and agent that depend on it.
 //
 // A second, booking-restricted "Search Agent" is intentionally NOT seeded here —
 // it is enrolled later, at runtime, through the agent's admin onboarding route,
 // which is what demonstrates live enrollment.
 //
-// Everything here is a real API call. The enrollment token is minted through the
-// live endpoint; the credential is issued by the live issuer. Nothing is stubbed.
+// Everything here is a real API call: the agent is created and its key enrolled
+// against the live API, its credentials are issued by the live issuer, and its
+// responsible party roots its chain at the service. Nothing is stubbed.
 import 'dotenv/config';
 import { INITIAL_PERSONA, env } from '../config.js';
 import { enrollPersona } from '../personas/enroll.js';
 import { addPersona, hasPersona, loadPersonas } from '../personas/store.js';
+import { ensureService } from '../service/identity.js';
 
 function log(actor: 'Setup' | 'Agent Owner' | 'Helix ID' | 'Agent', message: string): void {
   console.log(`[${actor}] ${message}`);
@@ -42,6 +45,8 @@ const CONSOLE_URL = process.env.CONSOLE_URL ?? 'http://localhost:8080';
 
 async function main(): Promise<void> {
   await waitForApi(env.helixApiUrl);
+  const service = await ensureService();
+  log('Helix ID', `Service ${service.did} (its own key, on the shared volume).`);
   await loadPersonas();
 
   // Re-running the demo should not re-enroll. (docker-compose down -v is the
@@ -62,9 +67,9 @@ async function main(): Promise<void> {
 
   log('Helix ID', `Issued credential ${vcId}.`);
   log('Agent', `DID: ${did}`);
-  log('Agent', `Scopes: ${persona.scopes.join(', ')}`);
-  log('Agent', `Agent DID ${persona.agentDid} — key held by the platform, not written locally.`);
-  log('Setup', `Seed complete. Token, enrollment and issuance events are now in Console → Audit (${CONSOLE_URL}).`);
+  log('Agent', `Attested: ${persona.scopes.join(', ')}; its chain at the service allows ${persona.chain?.[0]?.credentialSubject.allowedAction?.join(', ') ?? 'nothing'}.`);
+  log('Agent', `Agent DID ${persona.agentDid} — its key is in its own key directory; HelixID only has the public key.`);
+  log('Setup', `Seed complete. Agent creation, enrollment and issuance events are now in Console → Audit (${CONSOLE_URL}).`);
 }
 
 main().catch((error: unknown) => {

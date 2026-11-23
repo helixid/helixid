@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /
 COPY examples/e2e-travel-concierge-py/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# helix-sdk-py from PyPI. The mcp-middleware extra pulls in the official MCP
-# SDK that the mcp_server package uses for the wire protocol.
-RUN pip install --no-cache-dir "helixid-sdk-py[mcp-middleware]>=0.1.1"
+# helix-sdk-py from PyPI, with the KYA-OS middleware (local verifier, response
+# proofs). Needs the KYA-OS release (3.0).
+RUN pip install --no-cache-dir "helixid-sdk-py[mcp-middleware]>=3.0"
 
 # The demo itself.
 COPY examples/e2e-travel-concierge-py examples/e2e-travel-concierge-py
