@@ -1,18 +1,16 @@
 # One Service Provider app. Python port of sp-shared/app.ts. Both demo SPs
-# are this same shape -- only the tool catalog and scope strings differ.
+# are this same shape: only the tool catalog and scope strings differ.
 #
-# This single app owns all four SP responsibilities:
-#   C1  POST /api/mcp              MCP endpoint (tools/list + tools/call)
-#   C2  GET  /api/consent/scopes   scope resolution for the widget
-#   C3  POST /api/consent/accept   grant issuance -- signs with the SP's key
-#   C4  the booking handlers behind C1's scope gate
+#   POST /api/mcp   MCP endpoint (tools/list + tools/call). Open tools run for
+#                   anyone; a scoped tool needs the user's consent, verified
+#                   from the call itself (see kyaos_gate.py).
 #
-# plus the two artifacts an SP must host for anyone to verify its grants:
-#   GET /.well-known/did.json      its did:web document
-#   GET /status-list/1             its Bitstring status list
-#
-# The SP's private key lives only in this process. The browser never sees
-# it; grant signing happens exclusively inside POST /api/consent/accept.
+# KYA-OS story L3-H: consent is not a grant this SP signs. A call without the
+# user's authority gets the signed needs_authorization challenge; its
+# authorizationUrl is Helix's consent page, branded as this SP, where the
+# user's own did:key signs the root of the agent's chain. The agent retries
+# with that hop; this SP verifies it like any other chain. The SP renders no
+# consent page and holds no key able to sign as a user.
 
 from __future__ import annotations
 
@@ -20,498 +18,131 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 
-from helix_sdk.client import HelixClient
-from helix_sdk.did import build_did_document
-from helix_sdk.errors import HelixError
-from helix_sdk.grant import IssuerKeyMaterial, issue_grant
+from helix_mcp_middleware import ChallengeContext
 
-from helixid_config import SpDefinition, status_list_url_for
-from sp_shared.audit import AuditEmitter, AuditEvents, NOOP
-from sp_shared.html import consent_page_html, sp_login_page_html
-from sp_shared.resolve_scopes import resolve_consent_scopes
-from sp_shared.store import SpStore
+from helixid_config import SpDefinition
+from sp_shared.audit import AuditEmitter
+from sp_shared.kyaos_gate import Gate, challenge_tool_result
+
+# Which of this SP's users the agent acts for: the demo agent names the traveler's account here (see README).
+SERVICE_USER_META_KEY = "org.helixid/service-user"
 
 
-def create_sp_app(
-    definition: SpDefinition,
-    issuer_did: str,
-    issuer_private_key_hex: str,
-    issuer_public_key_hex: str,
-    base_url: str,
-    helix_api_url: str,
-    store: SpStore,
-    mcp_server_url: Optional[str] = None,
-    widget_dist_path: Optional[str] = None,
-    audit: Optional[AuditEmitter] = None,
-) -> tuple:
-    status_list_url = status_list_url_for(base_url)
-    resolved_mcp_url = mcp_server_url or f"{base_url}/api/mcp"
-    helix_client = HelixClient(helix_api_url)
-    audit_emitter = audit or NOOP
+def _without_control_arguments(args: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in args.items() if not k.startswith("_kyaos") and k != "_helixCorrelationId"}
 
-    counters = {"grantsIssued": 0, "scopeResolutions": 0, "consentRequired": 0}
 
+def create_sp_app(definition: SpDefinition, issuer_did: str, gate: Gate, audit: Optional[AuditEmitter] = None) -> tuple:
+    # Test-visible counters: challenges answered, and scoped tools run on the user's consent.
+    counters = {"consentRequired": 0, "authorized": 0}
     app = Flask(definition.id)
-    browser_sessions: set = set()
 
     def log(message: str) -> None:
         print(f"[{datetime.now(timezone.utc).isoformat()}] [{definition.id}] {message}", flush=True)
 
-    def current_browser_session() -> Optional[str]:
-        token = request.cookies.get("sp_session")
-        return token if token in browser_sessions else None
+    def emit(**event: Any) -> None:
+        if audit is not None:
+            audit.emit(event)
 
-    # -- Hosted identity artifacts -------------------------------------------
-
-    @app.get("/.well-known/did.json")
-    def did_doc() -> Any:
-        return jsonify(build_did_document(issuer_did, issuer_public_key_hex))
-
-    @app.get("/status-list/<list_id>")
-    def status_list(list_id: str) -> Any:
-        return jsonify(store.get_status_list())
-
+    # The agent reads `did` from here at startup: Helix minted it at enrollment.
     @app.get("/health")
     def health() -> Any:
-        return jsonify(
-            {
-                "status": "ok",
-                "sp": definition.id,
-                "did": issuer_did,
-                "statusListUrl": status_list_url,
-                "tools": [t.name for t in definition.tools],
-            }
-        )
-
-    # -- C2: scope resolution for the consent widget -------------------------
-
-    @app.get("/api/consent/scopes")
-    def consent_scopes() -> Any:
-        agent_did = request.args.get("agentDid", "")
-        log(f"consent scopes requested (agentDid={agent_did or 'none'})")
-        counters["scopeResolutions"] += 1
-        try:
-            scope_options = resolve_consent_scopes(definition.curated_fallback, resolved_mcp_url)
-            return jsonify({"scopeOptions": scope_options})
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": {"code": "SCOPE_RESOLUTION_FAILED", "message": str(exc)}}), 500
-
-    # -- C3: grant issuance ---------------------------------------------------
-
-    @app.post("/api/consent/accept")
-    def consent_accept() -> Any:
-        body = request.get_json(silent=True) or {}
-        agent_did = body.get("agentDid")
-        user_did = body.get("userDid")
-        scopes = body.get("scopes")
-        durability = body.get("durability")
-        correlation_id = body.get("correlationId")
-
-        if not agent_did or not user_did or not isinstance(scopes, list) or not durability:
-            return (
-                jsonify(
-                    {
-                        "error": {
-                            "code": "INVALID_REQUEST",
-                            "message": "agentDid, userDid, scopes and durability are required",
-                        }
-                    }
-                ),
-                400,
-            )
-
-        try:
-            scope_options = resolve_consent_scopes(definition.curated_fallback, resolved_mcp_url)
-            missing_required = [
-                o["scope"] for o in scope_options if o.get("required") and o["scope"] not in scopes
-            ]
-            if missing_required:
-                return (
-                    jsonify(
-                        {
-                            "error": {
-                                "code": "MISSING_REQUIRED_SCOPE",
-                                "message": f"Selection is missing required scope(s): {', '.join(missing_required)}",
-                                "missingRequired": missing_required,
-                            }
-                        }
-                    ),
-                    400,
-                )
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": {"code": "SCOPE_RESOLUTION_FAILED", "message": str(exc)}}), 500
-
-        try:
-            result = issue_grant(
-                helix_client,
-                IssuerKeyMaterial(did=issuer_did, private_key_hex=issuer_private_key_hex),
-                agent_did,
-                user_did,
-                scopes,
-                durability,
-                store.get_status_list(),
-                status_list_url,
-                service_did=issuer_did,
-            )
-            grant_vc = result["grantVC"]
-            updated_status_list = result["updatedStatusList"]
-
-            store.record_grant(
-                {
-                    "grantVC": grant_vc,
-                    "agentDid": agent_did,
-                    "userDid": user_did,
-                    "scopes": scopes,
-                    "durability": durability,
-                    "issuedAt": datetime.now(timezone.utc).isoformat(),
-                },
-                updated_status_list,
-            )
-
-            counters["grantsIssued"] += 1
-            log(f"grant issued to {agent_did} for {user_did} [{', '.join(scopes)}]")
-            audit_emitter.emit(
-                {
-                    "event": AuditEvents.VC_ISSUED,
-                    "correlationId": correlation_id,
-                    "agentDid": agent_did,
-                    "userDid": user_did,
-                    "vcId": grant_vc.get("id"),
-                    "credentialType": "DelegationGrantCredential",
-                    "issuer": issuer_did,
-                    "scopes": scopes,
-                    "validUntil": grant_vc.get("validUntil"),
-                    "credentialStatus": "active",
-                    "result": "success",
-                    "resultSummary": f"Consent grant issued for {', '.join(scopes)}",
-                }
-            )
-            return jsonify({"grantVC": grant_vc}), 201
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": {"code": "GRANT_ISSUANCE_FAILED", "message": str(exc)}}), 500
-
-    # -- C1 + C4: MCP endpoint and the booking handlers behind it ------------
+        return jsonify({"status": "ok", "sp": definition.id, "did": issuer_did, "tools": [tool.name for tool in definition.tools]})
 
     @app.post("/api/mcp")
     def mcp() -> Any:
         rpc = request.get_json(silent=True) or {}
         rpc_id = rpc.get("id")
-        method = rpc.get("method")
-
-        if method == "tools/list":
-            return jsonify(
-                _jsonrpc_result(
-                    rpc_id,
-                    {"tools": [t.to_dict() for t in definition.tools]},
-                )
-            )
-
-        if method != "tools/call":
-            return jsonify(_jsonrpc_error(rpc_id, -32601, f"Method not found: {method}"))
+        if rpc.get("method") == "tools/list":
+            return jsonify(_jsonrpc_result(rpc_id, {"tools": [tool.to_dict() for tool in definition.tools]}))
+        if rpc.get("method") != "tools/call":
+            return jsonify(_jsonrpc_error(rpc_id, -32601, f"Method not found: {rpc.get('method')}"))
 
         params = rpc.get("params") or {}
-        tool_name = params.get("name", "")
-        args = dict(params.get("arguments") or {})
+        tool_name = params.get("name") or ""
+        args = params.get("arguments") or {}
+        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
         tool = next((t for t in definition.tools if t.name == tool_name), None)
-        if not tool:
+        if tool is None:
             return jsonify(_jsonrpc_error(rpc_id, -32602, f"Unknown tool: {tool_name}"))
-
         required_scope = tool.required_scope
         correlation_id = args.get("_helixCorrelationId") if isinstance(args.get("_helixCorrelationId"), str) else None
+        call_request = {"method": "tools/call", "params": params}
 
-        # Open, read-only tools run with no presentation and no scope check.
+        # Open, read-only tools run with no proof and no scope check.
         if not required_scope:
             log(f"OPEN    {tool_name}")
-            output = _run_tool(tool_name, args, "anonymous")
-            audit_emitter.emit(
-                {
-                    "event": AuditEvents.TOOL_INVOKED,
-                    "correlationId": correlation_id,
-                    "toolName": tool_name,
-                    "result": "success",
-                    "resultSummary": _summarize_tool_result(tool_name, output),
-                    "reason": "OPEN_TOOL_NO_SCOPE_REQUIRED",
-                }
-            )
+            output = _run_tool(tool_name, _without_control_arguments(args), "anonymous")
+            emit(event="tool.call.completed", correlationId=correlation_id, toolName=tool_name, result="success",
+                 resultSummary=_summarize_tool_result(tool_name, output), reason="OPEN_TOOL_NO_SCOPE_REQUIRED")
             return jsonify(_jsonrpc_result(rpc_id, {"structuredContent": output}))
 
-        vp = args.get("_helixVP")
-        if not vp:
-            counters["consentRequired"] += 1
-            log(f"DENIED  {tool_name}  no presentation supplied")
-            audit_emitter.emit(
-                {
-                    "event": AuditEvents.AUTHZ_DENIED,
-                    "correlationId": correlation_id,
-                    "toolName": tool_name,
-                    "requiredScope": required_scope,
-                    "result": "blocked",
-                    "reason": "NO_PRESENTATION",
-                    "resultSummary": f"{tool_name} needs consent — no credential presented",
-                }
-            )
-            return jsonify(
-                _jsonrpc_error(
-                    rpc_id,
-                    -32001,
-                    "Consent required",
-                    {
-                        "code": "CONSENT_REQUIRED",
-                        "reason": "NO_PRESENTATION",
-                        "requiredScope": required_scope,
-                        "serviceDid": issuer_did,
-                        "consentUrl": f"{base_url}/consent",
-                    },
+        # The agent's own request proof, and the chain the user signed when there is one: verified here, from the call alone.
+        verdict = gate.verify(call_request)
+        if not verdict.ok:
+            log(f"DENIED  {tool_name}  {verdict.code}")
+            emit(event="proof.rejected", correlationId=correlation_id, toolName=tool_name, requiredScope=required_scope,
+                 result="failure", reason=verdict.code, resultSummary=f"Verification failed ({verdict.code})")
+            refused = {"isError": True, "content": [{"type": "text", "text": verdict.message}], "structuredContent": {"error": verdict.code}}
+            return jsonify(_jsonrpc_result(rpc_id, gate.sign(call_request, refused, "denied")))
+
+        scopes: List[str] = list(verdict.scopes or [])
+        # L3-E: a retry after consent carries the resume token and the new hop; the hop is verified in full before it grants anything.
+        retry = gate.needs_authorization.read_retry({"input": args})
+        if retry is not None:
+            try:
+                granted = gate.needs_authorization.authorize_retry(
+                    retry.resume_token, retry.credential, ChallengeContext(agent_did=verdict.agent_did, tool=tool_name, scopes=[required_scope])
                 )
-            )
+                scopes = list(dict.fromkeys(scopes + granted.scopes))
+            except Exception as error:  # noqa: BLE001
+                reason = getattr(error, "reason", None) or "resume_refused"
+                log(f"DENIED  {tool_name}  retry refused ({reason})")
+                refused = {"isError": True, "content": [{"type": "text", "text": str(error)}], "structuredContent": {"error": reason}}
+                return jsonify(_jsonrpc_result(rpc_id, gate.sign(call_request, refused, "denied", verdict.agent_did)))
 
-        presented_credentials = vp.get("verifiableCredential") if isinstance(vp.get("verifiableCredential"), list) else []
-        audit_emitter.emit(
-            {
-                "event": AuditEvents.VC_PRESENTED,
-                "correlationId": correlation_id,
-                "agentDid": vp.get("holder") if isinstance(vp.get("holder"), str) else None,
-                "userDid": vp.get("delegatedBy") if isinstance(vp.get("delegatedBy"), str) else None,
-                "vpId": vp.get("id") if isinstance(vp.get("id"), str) else None,
-                "credentialType": " + ".join(
-                    t
-                    for entry in presented_credentials
-                    for t in (entry.get("type") or [])
-                    if t != "VerifiableCredential"
-                ),
-                "toolName": tool_name,
-                "requiredScope": required_scope,
-                "result": "success",
-                "resultSummary": f"Presented {len(presented_credentials)} credential(s) to {definition.display_name}",
-            }
-        )
-
-        try:
-            result = helix_client.verify_vp(vp, expected_target_service=issuer_did)
-            effective_scopes = result.get("effectiveScopes", [])
-            agent_did = result.get("agentDid")
-        except HelixError as exc:
-            code = exc.code or "VP_VERIFICATION_FAILED"
-            return _deny_verification(rpc_id, tool_name, required_scope, correlation_id, vp, code, log, audit_emitter)
-        except Exception:  # noqa: BLE001
-            return _deny_verification(
-                rpc_id, tool_name, required_scope, correlation_id, vp, "VP_VERIFICATION_FAILED", log, audit_emitter
-            )
-
-        audit_emitter.emit(
-            {
-                "event": AuditEvents.VP_VERIFIED,
-                "correlationId": correlation_id,
-                "agentDid": agent_did,
-                "userDid": vp.get("delegatedBy") if isinstance(vp.get("delegatedBy"), str) else None,
-                "vpId": vp.get("id") if isinstance(vp.get("id"), str) else None,
-                "toolName": tool_name,
-                "requiredScope": required_scope,
-                "effectiveScopes": effective_scopes,
-                "result": "success",
-                "resultSummary": "Signatures, validity and revocation all checked out",
-            }
-        )
-
-        grant_from_this_sp = next(
-            (
-                entry
-                for entry in presented_credentials
-                if isinstance(entry.get("type"), list)
-                and "DelegationGrantCredential" in entry["type"]
-                and entry.get("issuer") == issuer_did
-            ),
-            None,
-        )
-        if not grant_from_this_sp:
+        if required_scope not in scopes:
             counters["consentRequired"] += 1
-            log(f"DENIED  {tool_name}  agent {agent_did} verified but presented no grant from this SP")
-            audit_emitter.emit(
-                {
-                    "event": AuditEvents.AUTHZ_DENIED,
-                    "correlationId": correlation_id,
-                    "agentDid": agent_did,
-                    "userDid": vp.get("delegatedBy") if isinstance(vp.get("delegatedBy"), str) else None,
-                    "toolName": tool_name,
-                    "requiredScope": required_scope,
-                    "effectiveScopes": effective_scopes,
-                    "result": "blocked",
-                    "reason": "NO_GRANT_FOR_THIS_SERVICE",
-                    "resultSummary": (
-                        f"{tool_name} needs consent — credential verified, but this user has not yet "
-                        f"authorized {definition.display_name}"
-                    ),
-                }
-            )
-            return jsonify(
-                _jsonrpc_error(
-                    rpc_id,
-                    -32001,
-                    "Consent required",
-                    {
-                        "code": "CONSENT_REQUIRED",
-                        "reason": "NO_GRANT_FOR_THIS_SERVICE",
-                        "requiredScope": required_scope,
-                        "serviceDid": issuer_did,
-                        "consentUrl": f"{base_url}/consent",
-                    },
-                )
-            )
+            service_user_id = meta.get(SERVICE_USER_META_KEY) if isinstance(meta.get(SERVICE_USER_META_KEY), str) else None
+            if service_user_id is None:
+                return jsonify(_jsonrpc_error(rpc_id, -32602, f"Consent for {required_scope} needs to know which of this service's users the agent acts for",
+                                              {"code": "SERVICE_USER_REQUIRED"}))
+            log(f"CONSENT {tool_name}  agent {verdict.agent_did} lacks {required_scope}; challenge for {service_user_id}")
+            emit(event="authorization.denied", correlationId=correlation_id, agentDid=verdict.agent_did, toolName=tool_name,
+                 requiredScope=required_scope, effectiveScopes=scopes, result="blocked", reason="NEEDS_AUTHORIZATION",
+                 resultSummary=f"{tool_name} needs consent: the user has not yet authorized {definition.display_name}")
+            try:
+                # Creates the consent request at Helix (signed by this SP): its consent page is the challenge's URL.
+                challenge = gate.challenge(verdict.agent_did, tool_name, required_scope, service_user_id)
+            except Exception as error:  # noqa: BLE001 - e.g. Helix refused the consent request
+                log(f"CONSENT {tool_name}  no consent request: {error}")
+                return jsonify(_jsonrpc_error(rpc_id, -32603, f"Could not ask the user's consent: {error}", {"code": "CONSENT_REQUEST_FAILED"}))
+            return jsonify(_jsonrpc_result(rpc_id, gate.sign(call_request, challenge_tool_result(challenge), "needs_authorization", verdict.agent_did)))
 
-        if required_scope not in effective_scopes:
-            counters["consentRequired"] += 1
-            log(f"DENIED  {tool_name}  agent {agent_did} verified but lacks {required_scope}")
-            audit_emitter.emit(
-                {
-                    "event": AuditEvents.AUTHZ_DENIED,
-                    "correlationId": correlation_id,
-                    "agentDid": agent_did,
-                    "userDid": vp.get("delegatedBy") if isinstance(vp.get("delegatedBy"), str) else None,
-                    "vcId": grant_from_this_sp.get("id"),
-                    "toolName": tool_name,
-                    "requiredScope": required_scope,
-                    "effectiveScopes": effective_scopes,
-                    "result": "blocked",
-                    "reason": "INSUFFICIENT_EFFECTIVE_SCOPE",
-                    "resultSummary": (
-                        f'{tool_name} blocked — required scope "{required_scope}" not present in '
-                        f"[{', '.join(effective_scopes)}]"
-                    ),
-                }
-            )
-            return jsonify(
-                _jsonrpc_error(
-                    rpc_id,
-                    -32001,
-                    "Consent required",
-                    {
-                        "code": "CONSENT_REQUIRED",
-                        "reason": "INSUFFICIENT_EFFECTIVE_SCOPE",
-                        "requiredScope": required_scope,
-                        "serviceDid": issuer_did,
-                        "consentUrl": f"{base_url}/consent",
-                    },
-                )
-            )
-
-        log(f"GRANTED {tool_name}  agent={agent_did}  effectiveScopes=[{', '.join(effective_scopes)}]")
-        audit_emitter.emit(
-            {
-                "event": AuditEvents.AUTHZ_GRANTED,
-                "correlationId": correlation_id,
-                "agentDid": agent_did,
-                "userDid": vp.get("delegatedBy") if isinstance(vp.get("delegatedBy"), str) else None,
-                "vcId": grant_from_this_sp.get("id"),
-                "credentialType": "DelegationGrantCredential",
-                "issuer": issuer_did,
-                "toolName": tool_name,
-                "requiredScope": required_scope,
-                "effectiveScopes": effective_scopes,
-                "result": "success",
-                "resultSummary": f'Authorized for "{required_scope}"',
-            }
-        )
-
-        output = _run_tool(tool_name, args, agent_did)
-        audit_emitter.emit(
-            {
-                "event": AuditEvents.TOOL_INVOKED,
-                "correlationId": correlation_id,
-                "agentDid": agent_did,
-                "userDid": vp.get("delegatedBy") if isinstance(vp.get("delegatedBy"), str) else None,
-                "vcId": grant_from_this_sp.get("id"),
-                "toolName": tool_name,
-                "requiredScope": required_scope,
-                "effectiveScopes": effective_scopes,
-                "result": "success",
-                "resultSummary": _summarize_tool_result(tool_name, output),
-            }
-        )
-        return jsonify(_jsonrpc_result(rpc_id, {"structuredContent": output}))
-
-    def _deny_verification(rpc_id, tool_name, required_scope, correlation_id, vp, code, log_fn, audit_emitter_):
-        log_fn(f"DENIED  {tool_name}  verification failed ({code})")
-        audit_emitter_.emit(
-            {
-                "event": AuditEvents.VP_REJECTED,
-                "correlationId": correlation_id,
-                "agentDid": vp.get("holder") if isinstance(vp.get("holder"), str) else None,
-                "vpId": vp.get("id") if isinstance(vp.get("id"), str) else None,
-                "toolName": tool_name,
-                "requiredScope": required_scope,
-                "result": "failure",
-                "reason": code,
-                "resultSummary": f"Verification failed ({code})",
-            }
-        )
-        return jsonify(
-            _jsonrpc_error(
-                rpc_id,
-                -32002,
-                "Presentation could not be verified",
-                {"code": "VP_INVALID", "reason": code},
-            )
-        )
-
-    # -- Consent page ----------------------------------------------------------
-
-    if widget_dist_path:
-
-        @app.get("/widget/<path:filename>")
-        def widget_static(filename: str) -> Any:
-            return send_from_directory(widget_dist_path, filename)
-
-    @app.get("/consent")
-    def consent_page() -> Any:
-        agent_did = request.args.get("agentDid", "")
-        user_did = request.args.get("userDid", "")
-        demo = request.args.get("demo") == "1"
-        correlation_id = request.args.get("correlationId", "")
-        if not current_browser_session():
-            return Response(sp_login_page_html(definition, agent_did, user_did, demo), mimetype="text/html")
-        return Response(
-            consent_page_html(definition, agent_did, user_did, issuer_did, demo, correlation_id),
-            mimetype="text/html",
-        )
-
-    @app.post("/api/sp-login")
-    def sp_login() -> Any:
-        body = request.get_json(silent=True) or {}
-        if body.get("username") != "ada" or body.get("password") != "demo123":
-            return jsonify({"error": "Invalid username or password"}), 401
-        token = str(uuid.uuid4())
-        browser_sessions.add(token)
-        agent_did = body.get("agentDid", "")
-        user_did = body.get("userDid", "")
-        resp = jsonify(
-            {
-                "authenticated": True,
-                "redirectUrl": f"/consent?agentDid={_qs(agent_did)}&userDid={_qs(user_did)}",
-            }
-        )
-        resp.set_cookie("sp_session", token, httponly=True, samesite="Lax", path="/")
-        return resp
+        counters["authorized"] += 1
+        log(f"GRANTED {tool_name}  agent={verdict.agent_did}  user={verdict.user_did or '-'}  scopes=[{', '.join(scopes)}]  level={verdict.level}")
+        emit(event="authorization.approved", correlationId=correlation_id, agentDid=verdict.agent_did, userDid=verdict.user_did,
+             toolName=tool_name, requiredScope=required_scope, effectiveScopes=scopes, result="success",
+             resultSummary=f'Authorized for "{required_scope}" on the user\'s consent')
+        output = _run_tool(tool_name, _without_control_arguments(args), verdict.agent_did, verdict.user_did)
+        emit(event="tool.call.completed", correlationId=correlation_id, agentDid=verdict.agent_did, toolName=tool_name,
+             requiredScope=required_scope, effectiveScopes=scopes, result="success", resultSummary=_summarize_tool_result(tool_name, output))
+        return jsonify(_jsonrpc_result(rpc_id, gate.sign(call_request, {"structuredContent": output}, "allowed", verdict.agent_did)))
 
     return app, counters
 
 
-def _qs(value: str) -> str:
-    from urllib.parse import quote
-
-    return quote(value, safe="")
-
-
 def _jsonrpc_result(rpc_id: Any, result: Any) -> Dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": rpc_id if rpc_id is not None else None, "result": result}
+    return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
 
 
 def _jsonrpc_error(rpc_id: Any, code: int, message: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     error: Dict[str, Any] = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
-    return {"jsonrpc": "2.0", "id": rpc_id if rpc_id is not None else None, "error": error}
+    return {"jsonrpc": "2.0", "id": rpc_id, "error": error}
 
 
 # -- C4: the booking backend --------------------------------------------------
@@ -531,7 +162,9 @@ def _summarize_tool_result(tool_name: str, output: Dict[str, Any]) -> str:
     return f"{tool_name} completed"
 
 
-def _run_tool(tool_name: str, args: Dict[str, Any], agent_did: str) -> Dict[str, Any]:
+def _run_tool(tool_name: str, args: Dict[str, Any], agent_did: str, user_did: Optional[str] = None) -> Dict[str, Any]:
+    # user_did: the user's did:key that signed the root hop -- whom the booking is for.
+    on_behalf_of = {} if user_did is None else {"onBehalfOf": user_did}
     if tool_name == "search_flights":
         origin = str(args.get("origin", "")).upper()
         destination = str(args.get("destination", "")).upper()
@@ -575,12 +208,14 @@ def _run_tool(tool_name: str, args: Dict[str, Any], agent_did: str) -> Dict[str,
             "flightId": str(args.get("flightId", "")),
             "status": "CONFIRMED",
             "bookedBy": agent_did,
+            **on_behalf_of,
         }
     if tool_name == "modify_booking":
         return {
             "bookingId": str(args.get("bookingId", "")),
             "status": "MODIFIED",
             "modifiedBy": agent_did,
+            **on_behalf_of,
         }
     if tool_name == "search_hotels":
         city = str(args.get("city", "DEL")).upper()
@@ -602,6 +237,7 @@ def _run_tool(tool_name: str, args: Dict[str, Any], agent_did: str) -> Dict[str,
             "hotelId": str(args.get("hotelId", "")),
             "status": "CONFIRMED",
             "bookedBy": agent_did,
+            **on_behalf_of,
         }
     return {"ok": True}
 
