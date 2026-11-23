@@ -267,6 +267,10 @@ const custodyService = new CustodyService({
   rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
   hopReissuer: credentialService,
 });
+// Agents created through the custody routes are agents to the service-provider
+// service too (getAgentScopes), as in core's and enterprise's server.ts: without
+// this, a consent request for one of them skipped the attested-scope ceiling.
+serviceProviderService.attachCustodialKeys(custodyService);
 // KYA-OS story L3-H: the user's pairwise did:key, which signs the root of a consent chain on the
 // user's click, is the one key helixid holds (the consent key is always Helix-held; agents and
 // services stay self-custody). It lives in its own DbKeyStore (wrapped_keys, AES-256-GCM under
