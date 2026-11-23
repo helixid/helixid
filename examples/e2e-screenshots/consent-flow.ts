@@ -15,14 +15,14 @@ const LABEL = process.env.LABEL ?? 'consent';
 const OUT_DIR = process.env.OUT_DIR ?? './screenshots';
 
 let shotIndex = 0;
-async function shot(page: Page, name: string) {
+async function shot(page: Page, name: string): Promise<void> {
   shotIndex += 1;
   const file = join(OUT_DIR, `${LABEL}-${String(shotIndex).padStart(2, '0')}-${name}.png`);
   await page.screenshot({ path: file });
   console.log(`  [shot] ${file}`);
 }
 
-async function main() {
+async function main(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1360, height: 900 } });

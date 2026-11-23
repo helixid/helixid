@@ -8,16 +8,11 @@ import {
   requireAgentIdentity,
   targetService,
   userDid,
-  verifyWithScopes,
 } from './shared.js';
 
 async function main(): Promise<void> {
   const client = createHelixClient();
   const { agentDid } = await requireAgentIdentity();
-
-  const realVerifier = {
-    verifySessionToken: client.verifySessionToken.bind(client),
-  };
 
   logStep('MCP', `Acting as ${agentDid}.`);
   logStep('MCP', `Attaching a real HelixVP to tool input for ${targetService}.`);
@@ -44,7 +39,7 @@ async function main(): Promise<void> {
   });
 
   // Call the middleware with the full tool call (it expects toolCall.input._helixVP)
-  const accepted = await requireReadOrders(outboundCall as any);
+  const accepted = await requireReadOrders(outboundCall as Parameters<typeof requireReadOrders>[0]);
   logStep('MCP', `Allowed request: ${JSON.stringify(accepted)}`);
 
   const deniedCall = await attachHelixVP(
@@ -58,7 +53,7 @@ async function main(): Promise<void> {
   );
   const requireWriteInventory = helixidMCPMiddleware({ client, requiredScopes: ['write:inventory'] });
   try {
-    await requireWriteInventory(deniedCall as any);
+    await requireWriteInventory(deniedCall as Parameters<typeof requireWriteInventory>[0]);
     logStep('MCP', 'Denied request: unexpectedly allowed');
   } catch (err: unknown) {
     logStep('MCP', `Denied request: ${(err as Error).message}`);

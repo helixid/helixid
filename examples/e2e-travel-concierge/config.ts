@@ -82,7 +82,7 @@ export const env = {
   agentPort: Number(process.env.AGENT_PORT ?? 4000),
   /** LLM provider selection. */
   llmProvider: (process.env.LLM_PROVIDER ?? 'anthropic') as 'anthropic' | 'openai' | 'azure' | 'gemini',
-  llmApiKeyOrThrow: () => required('LLM_API_KEY'),
+  llmApiKeyOrThrow: (): string => required('LLM_API_KEY'),
   /** Optional model override — currently only read by the Gemini provider. */
   llmModel: process.env.LLM_MODEL || undefined,
   /**
@@ -90,8 +90,8 @@ export const env = {
    * the Azure resource key; the "model" is your chat deployment name.
    */
   azureOpenAI: {
-    endpointOrThrow: () => required('AZURE_OPENAI_ENDPOINT'),
-    deploymentOrThrow: () => required('AZURE_OPENAI_DEPLOYMENT'),
+    endpointOrThrow: (): string => required('AZURE_OPENAI_ENDPOINT'),
+    deploymentOrThrow: (): string => required('AZURE_OPENAI_DEPLOYMENT'),
     apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? '2024-10-21',
   },
 };

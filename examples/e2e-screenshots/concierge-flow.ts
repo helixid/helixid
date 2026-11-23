@@ -20,18 +20,18 @@ const LABEL = process.env.LABEL ?? 'concierge';
 const OUT_DIR = process.env.OUT_DIR ?? './screenshots';
 
 let shotIndex = 0;
-async function shot(page: Page, name: string) {
+async function shot(page: Page, name: string): Promise<void> {
   shotIndex += 1;
   const file = join(OUT_DIR, `${LABEL}-${String(shotIndex).padStart(2, '0')}-${name}.png`);
   await page.screenshot({ path: file });
   console.log(`  [shot] ${file}`);
 }
 
-function botCount(page: Page) {
+function botCount(page: Page): Promise<number> {
   return page.locator('#log .msg.bot').count();
 }
 
-async function send(page: Page, message: string) {
+async function send(page: Page, message: string): Promise<void> {
   await page.fill('#m', message);
   const before = await botCount(page);
   await page.click('#s');
@@ -60,7 +60,7 @@ async function mintEnrollmentToken(scopes: string[], agentName: string): Promise
   return body.token;
 }
 
-async function main() {
+async function main(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1200, height: 950 } });

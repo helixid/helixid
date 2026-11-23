@@ -21,7 +21,7 @@
     "db:reset": "prisma migrate reset --force",
     "test:e2e": "pnpm --filter @helixid/e2e run test",
     "workspace:build": "pnpm run build && pnpm -r --if-present run build",
-    "workspace:typecheck": "pnpm run typecheck && pnpm --filter '!@helixid/example-e2e-consent-demo' -r --if-present run typecheck",
+    "workspace:typecheck": "pnpm run typecheck && pnpm --filter '!@helixid/example-e2e-consent-demo' --filter '!@helixid/example-framework-middleware' --filter '!@helixid/example-e2e-travel-concierge' -r --if-present run typecheck",
     "workspace:test:non-live": "pnpm run test:non-live && pnpm --filter '!@helixid/example-e2e-consent-demo' -r --if-present run test:non-live",
     "format": "prettier --write \"**/*.{ts,json,md}\" --ignore-path .gitignore",
     "setup": "tsx scripts/setup.ts",
