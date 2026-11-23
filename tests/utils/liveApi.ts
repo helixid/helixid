@@ -243,25 +243,6 @@ export async function enrollLiveService(api: LiveApi, name = 'amazon'): Promise<
   return { did: record.did, name: record.name };
 }
 
-/**
- * A user's consent for an agent, issued by the service through
- * POST /v1/service-delegation-grants. signVP with a userDid refuses without
- * one, so any test that signs on a user's behalf issues it first.
- */
-export async function issueLiveGrant(
-  api: LiveApi,
-  input: { serviceDid: string; agentDid: string; userDid: string; scopes: string[] },
-): Promise<SignedVC> {
-  const res = await fetch(`${api.baseUrl}/v1/service-delegation-grants`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-api-key': api.adminApiKey },
-    body: JSON.stringify({ ...input, durability: 'standing' }),
-  });
-  expect(res.status).toBe(201);
-  const { grantVC } = (await res.json()) as { grantVC: SignedVC };
-  return grantVC;
-}
-
 async function getAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();

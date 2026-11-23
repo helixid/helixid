@@ -60,6 +60,15 @@ import {
   RevocationService,
   RevocationSignalPublisher,
   serviceProviderRoutes,
+  consentRoutes,
+  ConsentRepository,
+  ConsentService,
+  UserKeyService,
+  DbKeyStore,
+  WrappedKeyRepository,
+  resolveKeyEncryptionKey,
+  consentAgentScopes,
+  consentServiceDirectory,
   ServiceProviderService,
   ServiceRepository,
   sessionRoutes,
@@ -173,6 +182,9 @@ const statusListPublisher: StatusListPublisher = new StatusListPublisher({
   apiBaseUrl: config.API_BASE_URL,
   // The Helix issuer, or a key Helix holds (KeyStore, rule 8); undefined for a self-custody issuer, who signs its own list.
   signerFor: async (did): Promise<Signer | undefined> => {
+    // KYA-OS story L3-H: a user's did:key signs its own list through the consent KeyStore while its key lives.
+    const userKeySigner = await userKeyService.statusListSignerFor(did);
+    if (userKeySigner !== undefined) return userKeySigner;
     try {
       return await credentialService.signerFor(did);
     } catch {
@@ -249,12 +261,40 @@ const custodyService = new CustodyService({
   host: config.DID_DOMAIN,
   didCache,
   recheck: custodyRecheckSettings(config),
-  credentialDetails: credentialCardDetails(vcService),
+  credentialDetails: credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did) }),
   // KYA-OS story C-E: a self-custody agent rotates its key with the SDK's rotateKey();
   // both keys stay listed for KEY_ROTATION_OVERLAP_SECONDS, and its leaf hops are reissued.
   rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
   hopReissuer: credentialService,
 });
+// KYA-OS story L3-H: the user's pairwise did:key, which signs the root of a consent chain on the
+// user's click, is the one key helixid holds (the consent key is always Helix-held; agents and
+// services stay self-custody). It lives in its own DbKeyStore (wrapped_keys, AES-256-GCM under
+// HELIX_KEY_STORE_KEK, else HOSTED_KEY_ENCRYPTION_KEY; an ephemeral key outside production).
+const consentKeyEncryption = resolveKeyEncryptionKey(config);
+const consentKeyStore = new DbKeyStore({
+  table: new WrappedKeyRepository(prisma, sqlite),
+  keyEncryptionKey: consentKeyEncryption.keyEncryptionKey,
+  keyEncryptionKeyId: consentKeyEncryption.keyEncryptionKeyId,
+});
+const consentRepository = new ConsentRepository(prisma, sqlite);
+const userKeyService: UserKeyService = new UserKeyService({ repo: consentRepository, keyStore: consentKeyStore, audit: auditTrail });
+const consentService = new ConsentService({
+  repo: consentRepository,
+  userKeys: userKeyService,
+  credentials: credentialService,
+  revocations: revocationService,
+  resolveDid: resolvePublicDid,
+  apiBaseUrl: config.API_BASE_URL,
+  serviceOf: consentServiceDirectory({ services: serviceRepository, custody: custodyService }),
+  agentScopesOf: consentAgentScopes(serviceProviderService),
+  audit: auditTrail,
+  requestTtlSeconds: config.CONSENT_REQUEST_TTL_SECONDS,
+  maxWindowSeconds: config.CONSENT_MAX_WINDOW_SECONDS,
+});
+// Cards of agents acting on user consent leave responsibleParty out (L3-H): each chain's root is its own.
+const consentCardDetails = credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did) });
+
 // Own-hosted agents waiting for their documents are re-checked in the background.
 const custodyRecheck = new CustodyRecheckScheduler(custodyService, { tickSeconds: config.CUSTODY_RECHECK_TICK_SECONDS });
 
@@ -394,6 +434,9 @@ await app.register(serviceProviderRoutes, {
   prefix: '/v1',
   serviceProviderService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
+  // KYA-OS story L3-H: a service that keeps its own key (keyCustody 'self') signs its own consent
+  // requests; it is created by the custody service like a self-custody agent ('helix' is refused here).
+  custody: { service: custodyService },
 });
 await app.register(custodyRoutes, {
   prefix: '/v1',
@@ -404,13 +447,21 @@ await app.register(custodyRoutes, {
   // KYA-OS story C-E point 5: an ancestor issuer of an agent's delegations may revoke its compromised key.
   keyRevocations: revocationService,
 });
+// KYA-OS story L3-H: consent requests, the consent page at authorizationUrl, renewal, withdrawal.
+await app.register(consentRoutes, {
+  consent: consentService,
+  userKeys: userKeyService,
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+  secureCookie: config.API_BASE_URL.startsWith('https:'),
+});
 // KYA-OS story C-A: /{path}/did.json, /{path}/card.json and /.well-known/kya-os-card.json; after the static routes, so the wildcard never shadows them.
-await app.register(entityCardRoutes, { source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, details: (did) => custodyService.cardDetails(did), credentials: credentialCardDetails(vcService) }) });
+await app.register(entityCardRoutes, { source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, details: (did) => custodyService.cardDetails(did), credentials: consentCardDetails }) });
 
 const shutdown = async (): Promise<void> => {
   app.log.info('Helix ID API shutting down...');
   await app.close();
   await custodyRecheck.stop();
+  userKeyService.stopShredding();
   statusListPublisher.stopRefresh();
   await revocationSignals.close();
   (redis as Redis | null)?.disconnect();
@@ -426,6 +477,7 @@ const start = async (): Promise<void> => {
   try {
     await app.listen({ port: config.PORT, host: '0.0.0.0' });
     if (config.CUSTODY_RECHECK_ENABLED) custodyRecheck.start();
+    if (config.USER_KEY_SHRED_INTERVAL_SECONDS > 0) userKeyService.startShredding(config.USER_KEY_SHRED_INTERVAL_SECONDS * 1000);
   } catch (err) {
     app.log.error(err);
     process.exit(1);
