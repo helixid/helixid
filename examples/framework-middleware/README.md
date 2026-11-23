@@ -1,5 +1,15 @@
 # Framework Middleware
 
+> **Held for the KYA-OS SDK release: this example does not typecheck and is
+> left out of `workspace:typecheck`.** It presents a Helix VP
+> (`attachHelixVP`, `HelixIDMiddleware`, `signVP`/`verifyVP`), which KYA-OS
+> story C-C removed. The published packages it pins cannot be combined
+> either: `@helixid/mcp-middleware@0.1.4` brings `@helixid/sdk-js@0.2`, while
+> `@helixid/langchain@0.2.2` needs `0.4`, and the current
+> `@helixid/langchain@0.4.0` no longer exports `HelixIDMiddleware`. It moves
+> to per-request proofs (`kyaos.withRequestProof`, the local verifier) when
+> the KYA-OS SDKs are published.
+
 This example demonstrates the real HelixID LangChain and MCP adapters against a live Helix API. It does not mock the Helix client, presentation signing, verification, or the onboarding flow.
 
 The setup flow creates a real agent DID through the Helix onboarding API and issues a real `HelixAgentCredential`. The LangChain and MCP scripts then ask the API to sign a presentation on that agent's behalf, and verify it through the API.

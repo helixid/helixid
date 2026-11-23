@@ -1,5 +1,12 @@
 # E2E Travel Concierge v2 — "does this actually work?" in one command
 
+> **Held for the KYA-OS SDK release: left out of `workspace:typecheck`.** The
+> agent presents a Helix VP, which KYA-OS story C-C removed, and the published
+> packages it pins don't typecheck together: `@helixid/mcp` (=
+> `@helixid/mcp-middleware@0.1.4`) brings `@helixid/sdk-js@0.2`, while the
+> example uses `0.4`. It moves to per-request proofs when the KYA-OS SDKs are
+> published.
+
 A real LLM agent enrolls with HelixID, gets a real verifiable credential, calls a
 **real MCP server**, and a protected tool runs only after `@helixid/mcp` verifies
 the agent's presentation against the **live HelixID API** — every step landing in
