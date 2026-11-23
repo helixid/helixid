@@ -5,11 +5,12 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { kyaos } from '@helixid/sdk-js';
 
 export interface StoredConsent {
   serviceDid: string;
   consentId: string;
-  hop: Record<string, any>;
+  hop: kyaos.consent.ConsentHop;
   /** The end of the consented window, Unix seconds. */
   windowUntil: number;
   helixUrl: string;

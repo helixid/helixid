@@ -44,7 +44,7 @@ export type CallSpToolResult =
   | { status: 'error'; error: { code: string; message: string } };
 
 interface JsonRpcResponse {
-  result?: Record<string, any>;
+  result?: Record<string, unknown>;
   error?: { code?: number; message?: string; data?: { code?: string } };
 }
 
@@ -58,7 +58,7 @@ async function post(spMcpUrl: string, call: { method: string; params: Record<str
 }
 
 /** The stored consent's hop, renewed first when it nears its end inside the consented window. */
-async function currentHop(options: CallSpToolOptions): Promise<Record<string, any> | undefined> {
+async function currentHop(options: CallSpToolOptions): Promise<kyaos.consent.ConsentHop | undefined> {
   const stored = await options.consents.get(options.serviceDid);
   if (stored === undefined) return undefined;
   const now = Date.now();
@@ -82,7 +82,7 @@ async function currentHop(options: CallSpToolOptions): Promise<Record<string, an
 }
 
 /** The call as sent: arguments (with the resume control arguments on a retry), the proof over exactly that, and the chain. */
-async function signedCall(options: CallSpToolOptions, hop: Record<string, any> | undefined, resume?: { token: string; hop: unknown }) {
+async function signedCall(options: CallSpToolOptions, hop: kyaos.consent.ConsentHop | undefined, resume?: { token: string; hop: unknown }): Promise<kyaos.ProofRequest> {
   const base = {
     name: options.toolName,
     arguments: { ...(options.args ?? {}), ...(options.correlationId !== undefined ? { _helixCorrelationId: options.correlationId } : {}) },

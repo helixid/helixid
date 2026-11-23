@@ -111,7 +111,7 @@ async function main(): Promise<void> {
   const consents = new ConsentStore(join(env.walletsDir, 'travel-planner-consents.json'));
   // The SPs' did:web documents are hosted by Helix; a local run serves them on loopback http.
   const resolveDid = kyaos.verifier.createDidResolver(
-    allowLoopbackHttp ? { rewriteUrl: (url) => url.replace(/^https:\/\/(localhost|127\.0\.0\.1)([:/])/, 'http://$1$2') } : {},
+    allowLoopbackHttp ? { rewriteUrl: (url): string => url.replace(/^https:\/\/(localhost|127\.0\.0\.1)([:/])/, 'http://$1$2') } : {},
   );
   /** Challenged calls waiting for the user's decision on Helix's page. */
   const pendingCalls = new Map<string, { options: CallSpToolOptions; prompt: ConsentPrompt; sp: keyof typeof SP_BY_ID }>();

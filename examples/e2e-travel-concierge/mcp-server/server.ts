@@ -67,7 +67,7 @@ const GUARDED_TOOLS: GuardedTool[] = [
       destination: z.string().describe('Destination city or airport code'),
       date: z.string().optional().describe('Optional travel date, YYYY-MM-DD'),
     },
-    run: (args, agentDid) => {
+    run: (args, agentDid): { text: string; structured: Record<string, unknown> } => {
       const origin = String(args.origin ?? '');
       const destination = String(args.destination ?? '');
       const flights = [
@@ -90,7 +90,7 @@ const GUARDED_TOOLS: GuardedTool[] = [
       flightId: z.string().describe('The flight identifier to book, e.g. BA249'),
       passengerName: z.string().describe('Full name of the passenger'),
     },
-    run: (args, agentDid) => {
+    run: (args, agentDid): { text: string; structured: Record<string, unknown> } => {
       const booking = {
         bookingId: `BKG-${randomUUID().slice(0, 8).toUpperCase()}`,
         flightId: String(args.flightId ?? ''),
