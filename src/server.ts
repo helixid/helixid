@@ -21,7 +21,6 @@ import {
   AesGcmKeyCustody,
   AgentRepository,
   agentRoutes,
-  agentKeyRoutes,
   AgentService,
   auditLogRoutes,
   auditRoutes,
@@ -288,7 +287,7 @@ await app.register(agentRoutes, {
   credentialService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
-await app.register(agentKeyRoutes, { prefix: '/v1', didRepository, didCache, adminApiKey: config.HELIX_ADMIN_API_KEY });
+// KYA-OS story F-3 removed POST /v1/agents/:did/keys (core's agentKeyRoutes); custody keys live behind core's custody routes.
 await app.register(serviceProviderRoutes, {
   prefix: '/v1',
   serviceProviderService,
