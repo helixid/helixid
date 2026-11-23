@@ -267,7 +267,7 @@ app.post('/mcp', async (req, res) => {
 });
 
 // Stateless mode does not use GET/DELETE session streams.
-const methodNotAllowed = (_req: express.Request, res: express.Response) =>
+const methodNotAllowed = (_req: express.Request, res: express.Response): express.Response =>
   res.status(405).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed' }, id: null });
 app.get('/mcp', methodNotAllowed);
 app.delete('/mcp', methodNotAllowed);

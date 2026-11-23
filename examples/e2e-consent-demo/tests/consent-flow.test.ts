@@ -17,9 +17,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   clearDIDCache,
-  createEd25519Proof,
-  generateKeyPair,
-  publicKeyToMultibase,
   type SignedVC,
 } from '@helixid/sdk-js';
 import { HelixClient } from '@helixid/sdk-js';

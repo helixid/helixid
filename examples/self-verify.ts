@@ -27,34 +27,6 @@ type Proof = {
   proofValue: string;
 };
 
-type SignedVC = {
-  id: string;
-  issuer: string;
-  validFrom: string;
-  validUntil: string;
-  credentialStatus: {
-    statusListIndex: string;
-    statusListCredential: string;
-  };
-  credentialSubject: {
-    privilegeScopes: string[];
-  };
-  proof: Proof;
-  [key: string]: unknown;
-};
-
-type SignedVP = {
-  id: string;
-  holder: string;
-  nonce: string;
-  expirationDate: string;
-  delegatedBy: string;
-  targetService: string;
-  verifiableCredential: [SignedVC, ...SignedVC[]];
-  proof: Proof;
-  [key: string]: unknown;
-};
-
 function proofToSignatureHex(proofValue: string): string {
   const raw = proofValue.startsWith('z') ? proofValue.slice(1) : proofValue;
   return Buffer.from(base58btcDecode(raw)).toString('hex');

@@ -16,6 +16,7 @@ import { runChatTurn } from './chat/runChatTurn.js';
 import { LlmError } from './chat/providers/llmError.js';
 import { SCOPES, env } from '../config.js';
 import { enrollPersona } from '../personas/enroll.js';
+import type { Persona } from '../personas/types.js';
 import { addPersona, getPersona, hasPersona, listPersonas, loadPersonas, updatePersona } from '../personas/store.js';
 import { toPublic } from '../personas/types.js';
 
@@ -246,7 +247,7 @@ async function ensureDelegationPersona(input: {
   displayName: string;
   scopes: string[];
   maxDelegationDepth: number;
-}) {
+}): Promise<Persona> {
   const existing = getPersona(input.id);
   if (existing) {
     const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });

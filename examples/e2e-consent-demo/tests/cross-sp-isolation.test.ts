@@ -9,7 +9,6 @@ import {
   clearDIDCache,
   HelixClient,
   revokeGrant,
-  VPBuilder,
   verifyVP,
   type SignedVC,
 } from '@helixid/sdk-js';
