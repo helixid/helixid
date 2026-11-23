@@ -1,74 +1,65 @@
+// Copyright 2026 DgVerse LLP
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// The LangChain adapter (@helixid/langchain): HelixIDToolWrapper wraps a
+// tool so every MCP request it sends is signed with the agent's own key, a
+// fresh KYA-OS request proof bound to that request and service, with the
+// agent's delegation chain attached (story C-C). The tool never sees the key;
+// the model never sees the proof. On the other side, the MCP server's gate
+// (@helixid/mcp-middleware) verifies it in-process.
+
 import 'dotenv/config';
-import {
-  HelixIDMiddleware,
-  HelixIDToolWrapper,
-  type StructuredToolLike,
-} from '@helixid/langchain';
-import {
-  createHelixClient,
-  decodeHelixVP,
-  logStep,
-  requireAgentIdentity,
-  targetService,
-  userDid,
-  verifyWithScopes,
-} from './shared.js';
+import { HelixIDToolWrapper, signCurrentRequest, type StructuredToolLike } from '@helixid/langchain';
+import { helixidMCPMiddleware } from '@helixid/mcp-middleware';
+import { agentSigner, logStep, requireAgentIdentity, serviceVerifier } from './shared.js';
 
 async function main(): Promise<void> {
-  const client = createHelixClient();
-  const { agentDid, vcId } = await requireAgentIdentity();
+  const identity = await requireAgentIdentity();
+  logStep('LangChain', `Acting as ${identity.agentDid} at ${identity.serviceDid}.`);
 
-  logStep('LangChain', `Acting as ${agentDid}.`);
-  logStep('LangChain', `Using VC ${vcId} for target service ${targetService}.`);
-
-  // The middleware asks the API to sign each VP: agent self-custody is
-  // retired, so there is no wallet file to point it at.
-  const middleware = HelixIDMiddleware({
-    client,
-    agentDid,
-    userDid,
-    targetService,
+  // The service side: the gate an MCP server puts in front of its tools.
+  const gate = helixidMCPMiddleware({
+    verifier: await serviceVerifier(identity.serviceDid),
+    toolScopes: { 'orders.lookup': ['read:orders'], 'inventory.adjust': ['write:inventory'] },
   });
 
-  const input: Record<string, unknown> = { query: 'Look up order ORD-1001' };
-  await middleware.callbacks[0]!.handleToolStart({ name: 'orders.lookup' }, input);
-  logStep('LangChain', `_helixVP injected into tool input (${String(input._helixVP).length} base64url chars).`);
-
-  const signedVP = decodeHelixVP(input._helixVP);
-  const verified = await verifyWithScopes(signedVP);
-  logStep('Helix ID', `Verified injected VP for ${verified.agentDid}; scopes: ${verified.scopes.join(', ')}.`);
-
+  // A tool that calls the orders MCP server: it signs the request it sends with signCurrentRequest.
   const ordersTool: StructuredToolLike = {
     name: 'orders.lookup',
-    async _call(toolInput: unknown): Promise<string> {
-      if (!toolInput || typeof toolInput !== 'object' || !('_helixVP' in toolInput)) {
-        throw new Error('Tool did not receive _helixVP');
-      }
-
-      // This is the receiving side of the integration. In a real LangChain app,
-      // the protected tool or service verifies the VP before trusting the call.
-      const toolVP = decodeHelixVP((toolInput as Record<string, unknown>)._helixVP);
-      const toolVerification = await verifyWithScopes(toolVP);
-      if (toolVerification.targetService !== targetService) {
-        throw new Error(`VP target service mismatch: ${toolVerification.targetService}`);
-      }
-      if (!toolVerification.scopes.includes('read:orders')) {
-        throw new Error('VP is missing required scope read:orders');
-      }
-
-      logStep('Orders Tool', `Verified ${toolVerification.agentDid} for read:orders.`);
+    async _call(input: unknown): Promise<string> {
+      const request = await signCurrentRequest({ name: 'orders.lookup', arguments: input as Record<string, unknown> });
+      const params = request.params as { name: string; arguments: Record<string, unknown>; _meta: Record<string, unknown> };
+      logStep('Orders Tool', `Signed request carries ${Object.keys(params._meta).join(' and ')}.`);
+      // What the MCP server does on receipt:
+      const caller = await gate.authorize({ name: params.name, input: params.arguments, _meta: params._meta, request });
+      logStep('Orders MCP', `Verified ${caller.agentDid ?? 'caller'} at ${caller.level}; scopes ${caller.scopes.join(', ')}.`);
       return 'order ORD-1001 is ready for fulfillment';
     },
   };
+  const signer = await agentSigner(identity);
+  const wrapped = HelixIDToolWrapper(ordersTool, { signer, audience: identity.serviceDid, chain: identity.chain });
+  logStep('LangChain', `Wrapped tool completed: ${String(await wrapped._call({ orderId: 'ORD-1001' }))}.`);
 
-  const wrappedTool = HelixIDToolWrapper(ordersTool, {
-    client,
-    agentDid,
-    userDid,
-    targetService,
-  });
-  const result = await wrappedTool._call({ orderId: 'ORD-1001' });
-  logStep('LangChain', `Wrapped tool completed: ${String(result)}.`);
+  // The same agent asking for a tool its chain does not cover is refused at the gate.
+  const inventoryTool: StructuredToolLike = {
+    name: 'inventory.adjust',
+    async _call(input: unknown): Promise<string> {
+      const request = await signCurrentRequest({ name: 'inventory.adjust', arguments: input as Record<string, unknown> });
+      const params = request.params as { name: string; arguments: Record<string, unknown>; _meta: Record<string, unknown> };
+      await gate({ name: params.name, input: params.arguments, _meta: params._meta, request });
+      return 'adjusted';
+    },
+  };
+  try {
+    await HelixIDToolWrapper(inventoryTool, { signer, audience: identity.serviceDid, chain: identity.chain })._call({ sku: 'SKU-1001', delta: -1 });
+    logStep('LangChain', 'inventory.adjust: UNEXPECTEDLY allowed');
+    process.exitCode = 1;
+  } catch (error: unknown) {
+    logStep('LangChain', `inventory.adjust refused as expected: ${(error as Error).message}`);
+  }
 }
 
 main().catch((error: unknown) => {

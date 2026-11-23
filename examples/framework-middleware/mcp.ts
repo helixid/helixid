@@ -1,67 +1,56 @@
+// Copyright 2026 DgVerse LLP
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// The MCP gate (@helixid/mcp-middleware) on its own: an agent signs an MCP
+// tools/call with kyaos.withRequestProof (its own key, its chain in
+// params._meta); the server's helixidMCPMiddleware verifies it in-process
+// (story F-2: DID documents, cards and status lists read from their
+// publishers) and lets it through, or refuses it with the verifier's reason.
+
 import 'dotenv/config';
-import { attachHelixVP, helixidMCPMiddleware } from '@helixid/mcp-middleware';
-import type { SignedVP } from '@helixid/sdk-js';
-import {
-  createHelixClient,
-  extractScopes,
-  logStep,
-  requireAgentIdentity,
-  targetService,
-  userDid,
-} from './shared.js';
+import { kyaos } from '@helixid/sdk-js';
+import { helixidMCPMiddleware } from '@helixid/mcp-middleware';
+import { agentSigner, logStep, requireAgentIdentity, serviceVerifier } from './shared.js';
 
 async function main(): Promise<void> {
-  const client = createHelixClient();
-  const { agentDid } = await requireAgentIdentity();
+  const identity = await requireAgentIdentity();
+  const signer = await agentSigner(identity);
+  logStep('MCP', `Acting as ${identity.agentDid} at ${identity.serviceDid}.`);
 
-  logStep('MCP', `Acting as ${agentDid}.`);
-  logStep('MCP', `Attaching a real HelixVP to tool input for ${targetService}.`);
-  const outboundCall = await attachHelixVP(
-    { name: 'orders.lookup', input: { orderId: 'ORD-1001' } },
-    {
-      client,
-      agentDid,
-      userDid,
-      targetService,
-    },
-  );
-
-  logStep(
-    'MCP',
-    `_helixVP attached to tool input (vpId: ${(outboundCall.input?._helixVP as { id?: string })?.id ?? 'unknown'})`,
-  );
-
-  // Verification is API-mediated too, so the middleware needs the client.
-  const requireReadOrders = helixidMCPMiddleware({
-    client,
-    requiredScopes: ['read:orders'],
-    allowSelfSigned: false,
+  const gate = helixidMCPMiddleware({
+    verifier: await serviceVerifier(identity.serviceDid),
+    toolScopes: { 'orders.lookup': ['read:orders'], 'inventory.admin': ['write:inventory'] },
   });
-
-  // Call the middleware with the full tool call (it expects toolCall.input._helixVP)
-  const accepted = await requireReadOrders(outboundCall as Parameters<typeof requireReadOrders>[0]);
-  logStep('MCP', `Allowed request: ${JSON.stringify(accepted)}`);
-
-  const deniedCall = await attachHelixVP(
-    { name: 'inventory.admin', input: { sku: 'SKU-1001' } },
-    {
-      client,
-      agentDid,
-      userDid,
-      targetService,
-    },
-  );
-  const requireWriteInventory = helixidMCPMiddleware({ client, requiredScopes: ['write:inventory'] });
-  try {
-    await requireWriteInventory(deniedCall as Parameters<typeof requireWriteInventory>[0]);
-    logStep('MCP', 'Denied request: unexpectedly allowed');
-  } catch (err: unknown) {
-    logStep('MCP', `Denied request: ${(err as Error).message}`);
+  interface SignedCall {
+    method: string;
+    params: { name: string; arguments: Record<string, unknown>; _meta: Record<string, unknown> };
   }
+  const sign = async (name: string, args: Record<string, unknown>): Promise<SignedCall> =>
+    (await kyaos.withRequestProof({ name, arguments: args }, signer, { audience: identity.serviceDid, chain: identity.chain })) as SignedCall;
 
-  const signedVP = outboundCall.input?._helixVP as SignedVP | undefined;
-  if (signedVP) {
-    logStep('MCP', `Outbound VP scopes: ${extractScopes(signedVP).join(', ')}.`);
+  const lookup = await sign('orders.lookup', { orderId: 'ORD-1001' });
+  const caller = await gate.authorize({ name: lookup.params.name, input: lookup.params.arguments, _meta: lookup.params._meta, request: lookup });
+  logStep('MCP', `Allowed: ${caller.agentDid} at ${caller.level}, scopes ${caller.scopes.join(', ')}.`);
+
+  const replay = gate.authorize({ name: lookup.params.name, input: lookup.params.arguments, _meta: lookup.params._meta, request: lookup });
+  await replay.then(
+    () => {
+      logStep('MCP', 'The same request again: UNEXPECTEDLY allowed');
+      process.exitCode = 1;
+    },
+    (error: unknown) => logStep('MCP', `The same request again is refused: ${(error as Error).message}`),
+  );
+
+  const admin = await sign('inventory.admin', { sku: 'SKU-1001' });
+  try {
+    await gate({ name: admin.params.name, input: admin.params.arguments, _meta: admin.params._meta, request: admin });
+    logStep('MCP', 'inventory.admin: UNEXPECTEDLY allowed');
+    process.exitCode = 1;
+  } catch (error: unknown) {
+    logStep('MCP', `inventory.admin refused as expected: ${(error as Error).message}`);
   }
 }
 

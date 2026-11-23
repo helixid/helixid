@@ -5,6 +5,14 @@ There are two kinds of examples here: **full demos you run with Docker**, and
 
 ## Full demos (Docker, one command)
 
+> **The four demos below wait for the L3-H examples port** (a follow-up PR):
+> they still present Helix VPs (`signVP`, `/v1/vp/verify`, `delegateAuthority`,
+> `/v1/onboard`), which KYA-OS retired, and they install the published SDKs,
+> which predate KYA-OS. Until then they do not run against this repo's API.
+> [`e2e-screenshots`](./e2e-screenshots), the Playwright walkthrough of these
+> demos' UIs, waits with them: it has no VP code of its own, only the demos'
+> screens and scenario buttons, which that port reshapes.
+
 Each of these is self-contained. You need this repo and Docker — no second
 checkout, no pre-built sibling packages, no registry credentials:
 
@@ -135,28 +143,15 @@ VP sessions and `delegateAuthority` are retired with no backward compatibility.
 
 ## Real Framework Middleware
 
-`framework-middleware` demonstrates the real LangChain and MCP adapters without mocking the Helix client. It uses the live Helix API, creates a real agent DID during onboarding, and has the API sign each presentation on that agent's behalf before verifying it through the API. Agent self-custody is retired, so there is no wallet and no local signing.
-
-Configure `.env` for the local API flow first:
-
-```sh
-HELIX_ADMIN_API_KEY=...
-```
-
-Then run:
-
-```sh
-pnpm install
-set -a; source .env; set +a
-pnpm --filter @helixid/api dev
-```
-
-In another terminal with the same environment exported:
+[`framework-middleware`](./framework-middleware) shows the real LangChain and
+MCP adapters on KYA-OS: a self-custody agent enrolled with `helix init`, a
+request proof on every MCP request (`HelixIDToolWrapper` /
+`kyaos.withRequestProof`), and `helixidMCPMiddleware` verifying it in-process.
+Until the KYA-OS SDKs are published it runs against the local SDK checkouts;
+see its README.
 
 ```sh
 pnpm example:middleware:setup
 pnpm example:middleware:langchain
 pnpm example:middleware:mcp
 ```
-
-The setup script writes `examples/framework-middleware/agent/agent.json`, holding only the agent's DID and credential id — no key material, and ignored by that example package. The scripts log DIDs, VC ids, scopes, and verification results.
