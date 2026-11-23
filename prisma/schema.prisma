@@ -371,3 +371,68 @@ model WrappedKey {
   @@index([did])
   @@map("wrapped_keys")
 }
+
+// KYA-OS story L3-H: the root delegation signed by the user's did:key at
+// consent. Public facts only: user private keys are in wrapped_keys
+// (subjectType 'consent'), through the KeyStore (stories rule 8). The
+// service's user id is never stored, only serviceUserRef (SHA-256 of the
+// service DID and the user id).
+model ConsentRequest {
+  id                 String    @id
+  serviceDid         String
+  serviceUserRef     String
+  agentDid           String
+  grant              Json      @map("grant_json")
+  grantDigest        String
+  windowUntil        DateTime
+  hopLifetimeSeconds Int?
+  display            Json?
+  returnUrl          String?
+  status             String
+  pageTokenHash      String?
+  expiresAt          DateTime
+  createdAt          DateTime  @default(now())
+  decidedAt          DateTime?
+  consentId          String?
+
+  @@index([agentDid])
+  @@map("consent_requests")
+}
+
+// One pairwise did:key per (service, service user) per consent cycle; the
+// DID string outlives the shredded private half.
+model UserKey {
+  did            String    @id
+  kid            String
+  serviceDid     String
+  serviceUserRef String
+  createdAt      DateTime  @default(now())
+  shreddedAt     DateTime?
+
+  @@index([serviceDid, serviceUserRef])
+  @@map("user_keys")
+}
+
+// What a user approved on the consent page (consentType user-signed).
+model UserConsent {
+  id                 String    @id
+  requestId          String
+  userDid            String
+  serviceDid         String
+  serviceUserRef     String
+  agentDid           String
+  invocationTarget   String
+  allowedAction      Json
+  caveats            Json?
+  windowUntil        DateTime
+  hopLifetimeSeconds Int?
+  consentType        String
+  createdAt          DateTime  @default(now())
+  withdrawnAt        DateTime?
+  latestHopId        String
+  lastHopUntil       DateTime
+
+  @@index([userDid])
+  @@index([serviceDid, serviceUserRef])
+  @@map("user_consents")
+}
