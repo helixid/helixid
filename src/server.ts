@@ -80,6 +80,7 @@ import {
   vcRoutes,
   VCService,
   verifyRoutes,
+  helixStatusListIssuers,
   type DIDDocument,
   type DidResolver,
   type RedisLike,
@@ -411,7 +412,13 @@ await app.register(revocationRoutes, {
 });
 await app.register(eventRoutes, { prefix: '/v1/events', signals: revocationSignals, adminApiKey: config.HELIX_ADMIN_API_KEY });
 // KYA-OS story F-2: the local verifier over HTTP; /v1/vp/verify is retired. It reads no database.
-await app.register(verifyRoutes, { prefix: '/v1/verify', allowLoopbackHttp: config.NODE_ENV !== 'production' });
+await app.register(verifyRoutes, {
+  prefix: '/v1/verify',
+  allowLoopbackHttp: config.NODE_ENV !== 'production',
+  // The Helix issuer keeps the identity list every hosted card names (§10.3); without
+  // this binding the spec-strict keeper rule refuses every Helix-hosted agent here.
+  statusListIssuers: helixStatusListIssuers(config.HELIX_ISSUER_DID, config.API_BASE_URL),
+});
 await app.register(sessionRoutes, {
   prefix: '/v1/sessions',
   publicKeyHex: jwtSessionKeyPair.publicKey,
