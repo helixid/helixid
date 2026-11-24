@@ -110,6 +110,10 @@ def _outcome(response: Mapping[str, Any], consent_reused: bool) -> Dict[str, Any
     return out
 
 
+# The SP's refusal of a revoked credential: for a stored hop, the user withdrew their consent.
+_STATUS_REVOKED = "status_revoked"
+
+
 def call_sp_tool(options: CallSpToolOptions) -> Dict[str, Any]:
     """{status: ok, data, consentReused} | {status: consent_required, prompt: ConsentPrompt} | {status: error, error}."""
     hop = _current_hop(options)
@@ -123,7 +127,13 @@ def call_sp_tool(options: CallSpToolOptions) -> Dict[str, Any]:
             "status": "consent_required",
             "prompt": ConsentPrompt(authorization_url=challenge.authorization_url, resume_token=challenge.resume_token, scopes=list(challenge.scopes)),
         }
-    return _outcome(response, hop is not None)
+    outcome = _outcome(response, hop is not None)
+    if hop is not None and outcome["status"] == "error" and outcome["error"]["code"] == _STATUS_REVOKED:
+        # Withdrawn at the SP (Helix revoked the hops under the user's key) before the hop was due
+        # for renewal: forget it and ask once more without it, so the SP can ask the user again.
+        options.consents.drop(options.service_did)
+        return call_sp_tool(options)
+    return outcome
 
 
 def complete_consent(options: CallSpToolOptions, prompt: ConsentPrompt) -> Dict[str, Any]:
