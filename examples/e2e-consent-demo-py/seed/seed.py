@@ -1,10 +1,18 @@
-# e2e-consent-demo-py seeder. Python port of seed/seed.ts.
+# e2e-consent-demo-py seeder. Python port of examples/e2e-consent-demo/seed/seed.ts.
 #
-# Run-once migration, not a service. It:
-#   1. provisions a did:web DID for each demo SP, generating and hosting each
-#      SP's initial status list in the same step;
-#   2. enrolls the Travel Planner Agent against the live HelixID API;
-#   3. prints agent DID, both SP DIDs, both status-list URLs, and Console URL.
+# Run once, not a service. It:
+#   1. enrolls each demo SP as a service at HelixID, self custody: the SP
+#      generates its own Ed25519 key and sends only the public key; HelixID
+#      hosts its did:web (sp_shared/identity.py);
+#   2. onboards the Travel Planner Agent, self custody: the operator creates
+#      it (admin POST /v1/agents, keyCustody 'self'), and helix_init generates
+#      the agent's key locally and enrolls it with the token. Helix issues its
+#      identity credential and attests its scopes (its Entity Card); the
+#      private key stays in the wallets directory;
+#   3. prints the agent DID, both SP DIDs and the Console URL.
+#
+# A user's consent is not seeded: it is given on Helix's consent page, the
+# first time an SP asks (KYA-OS story L3-H).
 
 from __future__ import annotations
 
@@ -13,39 +21,24 @@ import os
 import time
 
 import requests
+from dotenv import load_dotenv
 
-from helix_sdk.client import HelixClient
+load_dotenv()
 
-from helixid_config import (
-    AGENT_PRIVILEGE_SCOPES,
-    DEMO_USER_DID,
-    SPS,
-    agent_identity_path,
-    env,
-)
-from sp_shared.identity import provision_sp_identity, state_path
+from helix_sdk.custody import helix_init  # noqa: E402
 
-AGENT_ID = "travel-planner"
+from helixid_config import AGENT_PRIVILEGE_SCOPES, SPS, agent_dir, env  # noqa: E402
+from sp_shared.identity import enroll_sp_service  # noqa: E402
 
 
 def log(actor: str, message: str) -> None:
     print(f"[{actor}] {message}", flush=True)
 
 
-def read_identity(path: str):
-    """The agent's recorded onboarding result, or None on a first run."""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except (OSError, ValueError):
-        return None
-
-
 def wait_for_api(url: str, attempts: int = 60) -> None:
     for _ in range(attempts):
         try:
-            res = requests.get(f"{url}/health", timeout=3)
-            if res.ok:
+            if requests.get(f"{url}/health", timeout=5).ok:
                 log("Setup", f"HelixID API is healthy at {url}.")
                 return
         except requests.RequestException:
@@ -54,78 +47,51 @@ def wait_for_api(url: str, attempts: int = 60) -> None:
     raise RuntimeError(f"HelixID API at {url} did not become healthy in time.")
 
 
-def mint_token(display_name: str, scopes: list) -> str:
-    res = requests.post(
-        f"{env.helix_api_url}/v1/enrollment-tokens",
-        json={
-            "agentName": display_name,
-            "requestedScopes": scopes,
-            "requestedDomains": [],
-            "maxDelegationDepth": 0,
-        },
-        timeout=10,
+def onboard_agent() -> str:
+    """The agent's DID, onboarding it on a first run."""
+    directory = agent_dir(env.wallets_dir)
+    summary = os.path.join(directory, "helix-agent.json")
+    if os.path.exists(summary):
+        with open(summary, "r", encoding="utf-8") as f:
+            did = json.load(f)["did"]
+        log("Setup", f"Agent already onboarded; reusing {did}.")
+        return did
+    response = requests.post(
+        f"{env.helix_api_url}/v1/agents",
+        json={"name": "Travel Planner Agent (Python)", "scopes": AGENT_PRIVILEGE_SCOPES, "keyCustody": "self"},
+        headers={"x-admin-api-key": env.admin_api_key},
+        timeout=15,
     )
-    body = res.json() if res.content else {}
-    if not res.ok or not body.get("token"):
-        raise RuntimeError(f"Failed to mint enrollment token: HTTP {res.status_code}")
-    return body["token"]
+    created = response.json() if response.content else {}
+    if not response.ok or not created.get("enrollmentToken"):
+        error = created.get("error") if isinstance(created.get("error"), dict) else {}
+        raise RuntimeError(error.get("message") or f"agent creation failed: HTTP {response.status_code}")
+    # The key is generated here and never leaves this directory; Helix gets the public key and a proof of possession.
+    init = helix_init(env.helix_api_url, created["enrollmentToken"], directory)
+    log("Helix ID", f"Onboarded agent {init.did} ({init.label}, status {init.status}).")
+    return init.did
 
 
 def main() -> None:
     os.makedirs(env.wallets_dir, exist_ok=True)
-
-    # -- 1. SP identities: did:web + initial status list, together -----------
-    provisioned = []
-    for sp in SPS:
-        identity, status_list, created = provision_sp_identity(env.wallets_dir, sp.id, env.host, sp.port)
-
-        if created:
-            with open(state_path(env.wallets_dir, sp.id), "w", encoding="utf-8") as f:
-                json.dump({"statusList": status_list, "grants": []}, f, indent=2)
-            log("SP", f"Provisioned {sp.display_name}: {identity.did}")
-            log("SP", f"  status list -> {identity.statusListUrl}")
-        else:
-            log("SP", f"{sp.display_name} already provisioned ({identity.did}); reusing.")
-
-        provisioned.append({"id": sp.id, "did": identity.did, "statusListUrl": identity.statusListUrl})
-
-    # -- 2. Travel Planner Agent onboarding (server custody) -------------------
     wait_for_api(env.helix_api_url)
 
-    identity_file = agent_identity_path(env.wallets_dir, AGENT_ID)
-    identity = read_identity(identity_file)
+    enrolled = []
+    for sp in SPS:
+        identity, created = enroll_sp_service(env.wallets_dir, sp, env.host, sp.port, env.helix_api_url, env.admin_api_key)
+        log("SP", f"Enrolled {sp.display_name}: {identity.did}" if created else f"{sp.display_name} already enrolled ({identity.did}); reusing.")
+        enrolled.append((sp.id, identity.did))
 
-    if identity is not None:
-        log("Setup", f'Agent "{AGENT_ID}" already onboarded; reusing {identity["agentDid"]}.')
-    else:
-        token = mint_token("Travel Planner Agent", list(AGENT_PRIVILEGE_SCOPES))
-        client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
-        # Two calls on purpose: minting the enrollment token is the agent
-        # owner's action, onboarding redeems it. There is no wallet,
-        # passphrase or local key any more -- the server generates and holds
-        # the agent's key.
-        identity = client.onboard_agent(token, [])
-        with open(identity_file, "w", encoding="utf-8") as handle:
-            json.dump(identity, handle, indent=2)
-        log("Helix ID", f"Onboarded agent {identity['agentDid']} (credential {identity['vcId']}).")
+    agent_did = onboard_agent()
 
-    agent_did = identity["agentDid"]
-
-    # -- 3. Summary ------------------------------------------------------------
-    print("")
+    print("", flush=True)
     log("Setup", "Seed complete.")
     log("Agent", f"Travel Planner DID : {agent_did}")
-    log("Agent", f"Authority scopes   : {', '.join(AGENT_PRIVILEGE_SCOPES)}")
-    log("Agent", f"End user           : {DEMO_USER_DID}")
-    for sp in provisioned:
-        log("SP", f"{sp['id']} DID          : {sp['did']}")
-        log("SP", f"{sp['id']} status list  : {sp['statusListUrl']}")
+    log("Agent", f"Attested scopes    : {', '.join(AGENT_PRIVILEGE_SCOPES)}")
+    for sp_id, did in enrolled:
+        log("SP", f"{sp_id} DID          : {did}")
     log("Setup", f"Console            : {env.console_url}")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[Setup] Seeding failed: {exc}", flush=True)
-        raise SystemExit(1) from exc
+    main()

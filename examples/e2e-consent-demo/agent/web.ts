@@ -9,7 +9,7 @@
 // Service Provider has granted, so a viewer can watch authorization appear as
 // consent is given and see it reused on the second booking.
 
-export function agentPageHtml(spOrigins: string[]): string {
+export function agentPageHtml(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -219,16 +219,15 @@ export function agentPageHtml(spOrigins: string[]): string {
       <div id="sps"></div>
     </section>
     <div class="foot">
-      Each permission is a <strong>DelegationGrantCredential</strong> signed by that
-      Service Provider and held in the agent's wallet. Verification intersects it
-      with the agent's own credential, so a grant can never widen what the agent
-      may do.
+      Each permission is a <strong>DelegationCredential</strong> (the root hop of
+      the agent's chain) signed by your own did:key on Helix's consent page, one
+      per Service Provider. Verification intersects it with the agent's own
+      credential, so your consent can never widen what the agent may do.
     </div>
   </aside>
 </div>
 
 <script>
-const SP_ORIGINS = ${JSON.stringify(spOrigins)};
 const log = document.getElementById('log');
 const input = document.getElementById('message');
 const sendBtn = document.querySelector('.send');
@@ -257,7 +256,10 @@ async function api(path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = res.status === 204 ? {} : await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  // data.error is usually { message } (see server.ts's error responses),
+  // but a couple of routes still send a bare string -- handle both so a
+  // non-2xx never surfaces as the unhelpful "[object Object]".
+  if (!res.ok) throw new Error((data.error && data.error.message) || data.error || 'Request failed');
   return data;
 }
 
@@ -363,22 +365,39 @@ function renderBooking(sp, data, source) {
 }
 
 function renderConsent(result, call) {
-  pending = { ...call, consentUrl: result.consentUrl };
+  pending = { ...call, consentUrl: result.consentUrl, pendingId: result.pendingId };
   const name = result.sp === 'airline' ? 'Helix Air' : 'Helix Stay';
   say('I need your permission first.',
     '<div class="consent">' +
       '<div class="r1"><div class="sp">' + (result.sp === 'airline' ? 'HA' : 'HS') + '</div>' +
       '<div><div class="t">' + esc(name) + '</div>' +
-      '<div class="m">Sign in to ' + esc(name) + ' and choose what this agent may do on your behalf.</div></div></div>' +
-      '<button class="cta" data-action="consent">Sign in &amp; review permissions</button>' +
+      '<div class="m">Review exactly what this agent may do at ' + esc(name) + ' on your behalf. Approving signs it with a key that is yours at ' + esc(name) + ' only.</div></div></div>' +
+      '<button class="cta" data-action="consent">Review permissions</button>' +
     '</div>');
+}
+
+// KYA-OS story L3-H: the consent page is Helix's (the challenge's signed
+// authorizationUrl). The agent waits for the user's decision there and retries
+// with the root hop the user's did:key signed; no message crosses windows.
+async function openConsent() {
+  if (!pending) return;
+  const call = pending;
+  pending = null;
+  window.open(call.consentUrl, 'helixid-consent', 'popup,width=560,height=760');
+  try {
+    const result = await api('/api/consent/complete', { pendingId: call.pendingId });
+    if (result.status === 'declined') { say('Permission was declined, so I did not make the booking.'); return; }
+    if (result.status !== 'ok') throw new Error((result.error && result.error.message) || 'Call failed');
+    renderBooking(call.sp, result.data, 'fresh_consent');
+    refreshTrust();
+  } catch (err) { say('I could not complete that after your approval: ' + err.message); }
 }
 
 async function refreshTrust() {
   try {
     const s = await api('/api/state');
     document.getElementById('agentDid').textContent = s.agentDid;
-    document.getElementById('userDid').textContent = s.userDid;
+    document.getElementById('userDid').textContent = s.serviceUser;
     document.getElementById('sps').innerHTML = (s.grants || []).map((g) =>
       '<div class="sprow">' +
         '<div class="top"><div class="nm">' + esc(g.displayName) + '</div>' +
@@ -387,7 +406,8 @@ async function refreshTrust() {
         (g.scopes && g.scopes.length
           ? '<div class="scopes">' + g.scopes.map((sc) => '<span class="scope">' + esc(sc) + '</span>').join('') + '</div>'
           : '') +
-        (g.durability ? '<div class="dur">Durability: ' + esc(g.durability) + '</div>' : '') +
+        (g.windowUntil ? '<div class="dur">Consented until ' + esc(new Date(g.windowUntil).toLocaleDateString()) + '</div>' : '') +
+        (g.userDid ? '<div class="dur" title="Your pairwise key at this service">Signed by ' + esc(g.userDid.slice(0, 20)) + '…</div>' : '') +
       '</div>').join('');
   } catch { /* rail is informational; never block the chat on it */ }
 }
@@ -457,7 +477,7 @@ log.onclick = (e) => {
   if (!a) return;
   if (a.startsWith('book-flight:')) handle('Yes, book flight ' + a.slice('book-flight:'.length));
   else if (a.startsWith('book-hotel:')) handle('Yes, book hotel ' + a.slice('book-hotel:'.length));
-  else if (a === 'consent' && pending) window.open(pending.consentUrl, 'helixid-consent', 'popup,width=560,height=760');
+  else if (a === 'consent' && pending) openConsent();
 };
 
 const CHIPS = [
@@ -487,7 +507,7 @@ function showPlanner(p) {
 function enterApp(s) {
   document.getElementById('loginWrap').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
-  document.getElementById('identity').textContent = s.username + ' · ' + s.userDid;
+  document.getElementById('identity').textContent = s.username + ' · ' + s.serviceUser;
   showPlanner(s.planner);
   refreshTrust();
   input.focus();
@@ -507,29 +527,12 @@ document.getElementById('login').onsubmit = async (e) => {
   } catch (e2) { err.textContent = e2.message; }
 };
 
-window.addEventListener('message', async (e) => {
-  if (!SP_ORIGINS.includes(e.origin)) return;
-  if (e.data && e.data.type === 'helixid:consent-accepted' && pending) {
-    try {
-      await api('/api/grants', { grantVC: e.data.grantVC });
-      const call = { ...pending, authorizationSource: 'fresh_consent' };
-      pending = null;
-      refreshTrust();
-      await runCall(call);
-    } catch (err) { say('Could not store the permission: ' + err.message); }
-  }
-  if (e.data && e.data.type === 'helixid:consent-declined') {
-    pending = null;
-    say('Permission was declined, so I did not make the booking.');
-  }
-});
-
 // ── Unattended demo mode ────────────────────────────────────────────────
 // Visit /?demo=1 and the whole journey plays itself at presentation pace, so a
-// screen recording needs no operator. Consent popups auto-advance too (the
-// demo flag is forwarded to the SP), which is what makes an unbroken take
-// possible. Nothing here bypasses the credential flow — every step goes
-// through the same routes a human click would.
+// screen recording needs no operator, except the two consent clicks: Helix's
+// consent page never approves by itself (Helix signs as the user only on the
+// user's click), so the demo waits there for the presenter. Nothing here
+// bypasses the credential flow.
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -571,13 +574,13 @@ async function runDemo() {
   await pause(1900);
   optionButton('book-flight:')[1].click();
 
-  // Consent hand-off: open the SP popup, which auto-advances in demo mode.
+  // Consent hand-off: open Helix's consent page and wait for the presenter's click.
   await waitFor(() => document.querySelector('[data-action="consent"]'));
   await pause(1500);
   demoOpenConsent();
 
-  // Booking confirms once the grant returns.
-  await waitFor(() => document.querySelector('.receipt'), 45000);
+  // Booking confirms once the user's signed root hop returns.
+  await waitFor(() => document.querySelector('.receipt'), 300000);
   await pause(2400);
 
   // Hotel at the second, independent SP.
@@ -591,10 +594,10 @@ async function runDemo() {
   await waitFor(() => document.querySelector('[data-action="consent"]'));
   await pause(1500);
   demoOpenConsent();
-  await waitFor(() => document.querySelectorAll('.receipt').length >= 2, 45000);
+  await waitFor(() => document.querySelectorAll('.receipt').length >= 2, 300000);
   await pause(2400);
 
-  // The payoff: same Airline SP again — no prompt, no new grant.
+  // The payoff: same Airline SP again — no prompt, the stored hop is reused.
   await handle('Book my return flight');
   const returnDate = () => [...document.querySelectorAll('[data-answer]')]
     .map((b) => b.dataset.answer).find((v) => /^\\d{4}-\\d{2}-\\d{2}$/.test(v));
@@ -607,9 +610,7 @@ async function runDemo() {
 }
 
 function demoOpenConsent() {
-  if (!pending) return;
-  const url = pending.consentUrl + (pending.consentUrl.includes('?') ? '&' : '?') + 'demo=1';
-  window.open(url, 'helixid-consent', 'popup,width=560,height=760');
+  openConsent();
 }
 
 (async () => {

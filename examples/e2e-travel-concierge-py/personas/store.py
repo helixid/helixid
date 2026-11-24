@@ -1,7 +1,7 @@
 # Manifest-backed persona registry, Python port of ../personas/store.ts. The
 # manifest lives on the shared volume as personas.json -- the same
-# file the still-JS helixid-setup seeder writes the initial Concierge persona
-# to -- so personas enrolled at runtime (by either process) survive restarts
+# file the JS helixid-setup seeder writes the initial Concierge persona to --
+# so personas enrolled at runtime (by either process) survive restarts
 # and are visible to a freshly-booted agent. Held in memory for fast reads.
 
 from __future__ import annotations
@@ -75,33 +75,18 @@ def add_persona(persona: Persona) -> None:
         _personas = on_disk
 
 
-def update_persona(
-    persona_id: str,
-    *,
-    scopes: Optional[List[str]] = None,
-    active_credential_id: Optional[str] = None,
-    delegated_from_persona_id: Optional[str] = None,
-    delegated_scopes: Optional[List[str]] = None,
-    _clear_delegation: bool = False,
-) -> Persona:
+def update_persona(persona_id: str, **patch: object) -> Persona:
+    """Sets the given Persona fields (snake_case names); a value of None clears it."""
     global _personas
     with _lock:
         on_disk = {p.id: p for p in _read_manifest()}
         current = on_disk.get(persona_id)
         if current is None:
             raise RuntimeError(f"Unknown persona: {persona_id}")
-        if scopes is not None:
-            current.scopes = scopes
-        if active_credential_id is not None:
-            current.active_credential_id = active_credential_id
-        if _clear_delegation:
-            current.delegated_from_persona_id = None
-            current.delegated_scopes = None
-        else:
-            if delegated_from_persona_id is not None:
-                current.delegated_from_persona_id = delegated_from_persona_id
-            if delegated_scopes is not None:
-                current.delegated_scopes = delegated_scopes
+        for name, value in patch.items():
+            if not hasattr(current, name):
+                raise AttributeError(f"Persona has no field {name}")
+            setattr(current, name, value)
         on_disk[persona_id] = current
         _write_manifest(list(on_disk.values()))
         _personas = on_disk

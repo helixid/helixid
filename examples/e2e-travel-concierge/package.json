@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Fastest one-command HelixID demo: an LLM agent enrolls, gets a real credential, calls a real MCP server, and the tool only runs after @helixid/mcp verifies the presentation against the live HelixID API.",
+  "description": "Fastest one-command HelixID demo on KYA-OS: a self-custody LLM agent enrolls, signs each tool call with its own key, and the MCP server runs the tool only after verifying the request proof and the delegation chain in-process.",
   "scripts": {
     "setup": "tsx helixid-setup/seed.ts",
     "mcp": "tsx mcp-server/server.ts",
@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
-    "@helixid/sdk-js": "^0.4.0",
-    "@helixid/mcp": "npm:@helixid/mcp-middleware@^0.1.4",
+    "@helixid/mcp-middleware": "^1.0.0",
+    "@helixid/sdk-js": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",

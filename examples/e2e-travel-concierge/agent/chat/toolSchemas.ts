@@ -1,7 +1,7 @@
 // The tools the LLM is allowed to call. Note these are the *agent-facing* schemas
-// (what the model sees): plain business arguments, no VP. The HelixID presentation
-// is attached one layer down (tools/protectedCall.ts) and enforced one layer down
-// again by the MCP server. The model never sees a VP.
+// (what the model sees): plain business arguments, no proof. The request proof
+// and the delegation chain are attached one layer down (tools/protectedCall.ts)
+// and enforced one layer down again by the MCP server. The model never sees them.
 
 export const SYSTEM_PROMPT = [
   'You are a travel concierge agent. You can search flights with the search_flights',
