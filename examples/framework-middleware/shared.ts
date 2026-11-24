@@ -1,59 +1,49 @@
+// Copyright 2026 DgVerse LLP
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//    http://www.apache.org/licenses/LICENSE-2.0
+
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SignedVP, VerifyVPResult } from '@helixid/sdk-js';
-import { HelixClient, verifyVP } from '@helixid/sdk-js';
+import { kyaos } from '@helixid/sdk-js';
+import { createLocalVerifier, type LocalVerifier } from '@helixid/mcp-middleware';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const exampleRoot = __dirname;
 /**
- * Where setup records the agent's onboarding result.
- *
- * Agent self-custody is retired: onboarding returns only { agentDid, vcId }
- * and the key never leaves the server, so there is no wallet file and no
- * passphrase. This identity file replaces both.
+ * What setup records for the agent: its DID and key id, where `helix init`
+ * wrote its private key (it never leaves this machine), the service it acts
+ * at, and its delegation chain there (the root hop the operator issued).
  */
 export const agentIdentityPath = join(exampleRoot, 'agent', 'agent.json');
-export const helixApiUrl = process.env.API_BASE_URL ?? 'http://localhost:3000';
-/** signVP() is admin-key gated in OSS/core, so the agent process needs this. */
-export const adminApiKey = process.env.HELIX_ADMIN_API_KEY ?? 'dev-admin-key-change-in-production';
-export const targetService = process.env.HELIX_TARGET_SERVICE ?? 'amazon';
-export const userDid = process.env.HELIX_USER_DID ?? 'did:hedera:testnet:user-framework-middleware-demo';
-export const requestedScopes = ['read:orders', 'write:orders', 'read:catalog'];
-export const requestedDomains = ['https://framework-middleware.example.com'];
+export const helixApiUrl = (process.env.HELIX_API_URL ?? process.env.API_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+/** The operator's admin key: setup registers the service, creates the agent and issues its root hop. */
+export const adminApiKey = process.env.HELIX_ADMIN_API_KEY ?? '';
+/** What the agent is attested for, and what the service's tools need. */
+export const agentScopes = ['read:orders', 'read:catalog'];
+export const serviceScopes = ['read:orders', 'read:catalog', 'write:inventory'];
 
-export type VerificationWithScopes = VerifyVPResult & {
-  scopes: string[];
-  privilegeScopes: string[];
-  /** Optional on the VP itself — a presentation need not name an end user. */
-  userDid: string | undefined;
-  targetService: string;
-};
+export interface AgentIdentity {
+  agentDid: string;
+  /** The verification-method fragment `helix init` registered. */
+  kid: string;
+  signingKeyFile: string;
+  serviceDid: string;
+  chain: unknown[];
+}
 
-export type WalletVC = {
-  id: string;
-  validUntil?: string;
-  expirationDate?: string;
-  credentialSubject?: {
-    privilegeScopes?: unknown;
-  };
-};
-
-export function createHelixClient(): HelixClient {
-  return new HelixClient(helixApiUrl, { adminApiKey });
+export function logStep(scope: string, message: string): void {
+  console.log(`[${scope}] ${message}`);
 }
 
 export async function ensureAgentDirectory(): Promise<void> {
   await mkdir(dirname(agentIdentityPath), { recursive: true });
 }
 
-export interface AgentIdentity {
-  agentDid: string;
-  vcId: string;
-}
-
-/** The agent's recorded onboarding result, or null before setup has run. */
+/** The agent setup recorded, or null before setup has run. */
 export async function readAgentIdentity(): Promise<AgentIdentity | null> {
   try {
     return JSON.parse(await readFile(agentIdentityPath, 'utf8')) as AgentIdentity;
@@ -64,58 +54,32 @@ export async function readAgentIdentity(): Promise<AgentIdentity | null> {
 
 export async function requireAgentIdentity(): Promise<AgentIdentity> {
   const identity = await readAgentIdentity();
-  if (!identity) {
-    throw new Error(
-      `No agent identity at ${agentIdentityPath}. Run pnpm example:middleware:setup first.`,
-    );
-  }
+  if (!identity) throw new Error(`No agent at ${agentIdentityPath}. Run pnpm example:middleware:setup first.`);
   return identity;
 }
 
-/** The agent's credential, read back from the platform that holds it. */
-export async function loadAgentCredential(): Promise<{
-  identity: AgentIdentity;
-  vc: WalletVC;
-}> {
-  const identity = await requireAgentIdentity();
-  const client = createHelixClient();
-  const vc = (await client.getVC(identity.vcId)).vc as WalletVC | undefined;
-  if (!vc) {
-    throw new Error(`Credential ${identity.vcId} was not found on the API.`);
+/** The agent's own signer: EnvSigner reading the signing-key file `helix init` wrote. */
+export async function agentSigner(identity: AgentIdentity): Promise<kyaos.Signer> {
+  const env: Record<string, string> = {};
+  for (const line of (await readFile(identity.signingKeyFile, 'utf8')).split('\n')) {
+    const match = /^([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line.trim());
+    if (match) env[match[1]!] = match[2]!;
   }
-  return { identity, vc };
+  return new kyaos.EnvSigner({ did: identity.agentDid, kid: identity.kid, env });
 }
 
-export function decodeHelixVP(encoded: unknown): SignedVP {
-  if (typeof encoded !== 'string') {
-    throw new Error('Expected a base64url encoded Helix VP string');
-  }
-  return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as SignedVP;
-}
-
-export function encodeHelixVP(signedVP: SignedVP): string {
-  return Buffer.from(JSON.stringify(signedVP), 'utf8').toString('base64url');
-}
-
-export function extractScopes(signedVP: SignedVP): string[] {
-  const [credential] = signedVP.verifiableCredential as Array<WalletVC | undefined>;
-  const scopes = credential?.credentialSubject?.privilegeScopes;
-  return Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === 'string') : [];
-}
-
-export async function verifyWithScopes(signedVP: SignedVP): Promise<VerificationWithScopes> {
-  // Verification is API-mediated, so it needs a client like everything else here.
-  const verified = await verifyVP(signedVP, createHelixClient());
-  const scopes = extractScopes(signedVP);
-  return {
-    ...verified,
-    scopes,
-    privilegeScopes: scopes,
-    userDid: signedVP.delegatedBy,
-    targetService: signedVP.targetService,
-  };
-}
-
-export function logStep(actor: string, message: string): void {
-  console.log(`[${actor}] ${message}`);
+/**
+ * The service's in-process verifier (story F-2): DID documents, cards and
+ * status lists read from their publishers, nothing asked of a Helix database.
+ * Against a local helixid it reads http on loopback, and binds the Helix
+ * issuer to its identity status list (the list every hosted card names,
+ * SPEC-ENTITY-CARD §10.3).
+ */
+export async function serviceVerifier(serviceDid: string): Promise<LocalVerifier> {
+  const health = (await (await fetch(`${helixApiUrl}/health`)).json()) as { issuerDid: string };
+  return createLocalVerifier({
+    serviceDid,
+    allowLoopbackHttp: true,
+    statusListIssuers: { [health.issuerDid]: [`${helixApiUrl}/v1/status-list/helix-status-list-1`] },
+  });
 }

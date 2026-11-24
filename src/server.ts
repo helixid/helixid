@@ -80,6 +80,7 @@ import {
   vcRoutes,
   VCService,
   verifyRoutes,
+  helixStatusListIssuers,
   type DIDDocument,
   type DidResolver,
   type RedisLike,
@@ -267,6 +268,10 @@ const custodyService = new CustodyService({
   rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
   hopReissuer: credentialService,
 });
+// Agents created through the custody routes are agents to the service-provider
+// service too (getAgentScopes), as in core's and enterprise's server.ts: without
+// this, a consent request for one of them skipped the attested-scope ceiling.
+serviceProviderService.attachCustodialKeys(custodyService);
 // KYA-OS story L3-H: the user's pairwise did:key, which signs the root of a consent chain on the
 // user's click, is the one key helixid holds (the consent key is always Helix-held; agents and
 // services stay self-custody). It lives in its own DbKeyStore (wrapped_keys, AES-256-GCM under
@@ -407,7 +412,13 @@ await app.register(revocationRoutes, {
 });
 await app.register(eventRoutes, { prefix: '/v1/events', signals: revocationSignals, adminApiKey: config.HELIX_ADMIN_API_KEY });
 // KYA-OS story F-2: the local verifier over HTTP; /v1/vp/verify is retired. It reads no database.
-await app.register(verifyRoutes, { prefix: '/v1/verify', allowLoopbackHttp: config.NODE_ENV !== 'production' });
+await app.register(verifyRoutes, {
+  prefix: '/v1/verify',
+  allowLoopbackHttp: config.NODE_ENV !== 'production',
+  // The Helix issuer keeps the identity list every hosted card names (§10.3); without
+  // this binding the spec-strict keeper rule refuses every Helix-hosted agent here.
+  statusListIssuers: helixStatusListIssuers(config.HELIX_ISSUER_DID, config.API_BASE_URL),
+});
 await app.register(sessionRoutes, {
   prefix: '/v1/sessions',
   publicKeyHex: jwtSessionKeyPair.publicKey,

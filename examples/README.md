@@ -111,86 +111,70 @@ SDK packages are installed as git dependencies, which run nested installs and
 pull a lot over the network; a flaky connection fails the build. Re-run
 `docker compose up --build` — it resumes from cached layers.
 
-## Scripts (local API)
+## Scripts (local API): KYA-OS, end to end
 
-Start the API first:
+Start the API first (outside production it reads DID documents and status
+lists over http on loopback):
 
 ```sh
 set -a; source .env; set +a
 pnpm --filter @helixid/api start
 ```
 
-Verifier examples now mint fresh credentials and sign fresh VPs automatically (no fixture file needed).
-
-Then run:
+Then, with the same `HELIX_ADMIN_API_KEY` (and `HELIX_API_URL` if the API is
+not on `http://localhost:3000`):
 
 ```sh
-pnpm example:verify-vp
-pnpm example:verify-vp:sdk
-pnpm example:verify-vp:session-bridge
-pnpm example:scope-check
+pnpm example:request-proof
 pnpm example:self-verify
 pnpm example:revocation-check
+pnpm example:delegation-demo
 ```
 
-## Verifier fast-path patterns (both supported)
+None needs an LLM or Docker. Each registers a service, creates self-custody
+agents (`POST /v1/agents`) and runs `helix init` for them, so every agent's key
+is generated locally and only its public half reaches helixid. Each root hop
+(`POST /v1/grants`) roots an agent's authority over the service; the agent signs
+a KYA-OS request proof for each tool call with its own key, and the service
+accepts only an L3 verdict (live status reads). Until the KYA-OS SDKs are
+published they run against the local SDK checkouts, as `framework-middleware`
+does.
 
-### Path A — Verifier-issued JWT session
-
-```sh
-JWT_SECRET=replace-with-a-strong-secret \
-pnpm --filter @helixid/api exec tsx ../examples/verifier-session-cycle.ts
-```
-
-Flow: verify VP once → issue verifier-owned JWT → subsequent calls verify JWT locally until TTL expiry.
-
-### Path B — VP-result caching (no JWT)
-
-```sh
-pnpm --filter @helixid/api exec tsx ../examples/verifier-vp-cache-cycle.ts
-```
-
-Flow: verify VP once → cache verification result by `vpId` with TTL → subsequent calls with same `vpId` are cache hits.
-
-In both paths, the verifier owns policy/infrastructure decisions (scope checks, replay/cache store, TTLs, headers, and secrets).
-
-`verify-vp` creates a fresh VP and verifies it via `/v1/vp/verify`.
-
-`verify-vp:sdk` creates a fresh VP and verifies it locally (no `/v1/vp/verify` call).
-
-`verify-vp:session-bridge` creates a fresh VP, calls `/v1/vp/verify` with `session: true`, and verifies the returned JWT using `/v1/sessions/public-key`.
-
-`verify-vp-session-bridge` uses `HELIX_API_URL` (or `API_BASE_URL`) as-is for API calls.
-`verify-vp:sdk` performs local verification and still fetches DID/status resources referenced by the credential as needed.
-
-`scope-check` is the authorization-only subset (scope + target-service checks on an already verified, active payload).
-
-`revocation-check` is self-contained: it onboards a fresh credential, revokes it, verifies the status bit flip, then onboards a replacement credential.
+- [`request-proof.ts`](./request-proof.ts): one call verified through
+  `POST /v1/verify`, then the refusals a verifier must make: an action the
+  chain does not allow (`action_not_delegated`) and the same proof again
+  (`nonce_replayed`). Then cached against live status: the same kind of call,
+  each with a fresh proof, verified from the status cache (no `liveStatus`:
+  level L2, which the L3 policy refuses) and with a live read
+  (`liveStatus: true`: L3, accepted). Last, a call after the root hop was
+  revoked (`status_revoked`).
+- [`self-verify.ts`](./self-verify.ts): the service runs every check itself,
+  in-process, with `createLocalVerifier` (`@helixid/mcp-middleware`): it reads
+  the agent's DID document, keys and card from where they are published, then
+  shows each check refusing on purpose (request hash, audience, nonce,
+  attenuation, a cached status read held to L2, a revoked hop).
+- [`revocation-check.ts`](./revocation-check.ts): the agent's identity
+  credential revoked (`POST /v1/vcs/:id/revoke`, the bit set on the status
+  list, the next call refused `status_revoked`), its renewal refused, a
+  replacement agent enrolled, and that agent's credential renewed before it
+  expires (`POST /v1/vcs/:id/renew`).
+- [`delegation-demo.ts`](./delegation-demo.ts): agent-to-agent delegation. The
+  planner signs a hop to a research agent with its own key, narrowed to one
+  scope, and publishes its own signed status list; the research agent is
+  accepted for that scope, refused for the one the planner kept, and a hop
+  wider than its parent is refused (`attenuation_violation`).
 
 ## Real Framework Middleware
 
-`framework-middleware` demonstrates the real LangChain and MCP adapters without mocking the Helix client. It uses the live Helix API, creates a real agent DID during onboarding, and has the API sign each presentation on that agent's behalf before verifying it through the API. Agent self-custody is retired, so there is no wallet and no local signing.
-
-Configure `.env` for the local API flow first:
-
-```sh
-HELIX_ADMIN_API_KEY=...
-```
-
-Then run:
-
-```sh
-pnpm install
-set -a; source .env; set +a
-pnpm --filter @helixid/api dev
-```
-
-In another terminal with the same environment exported:
+[`framework-middleware`](./framework-middleware) shows the real LangChain and
+MCP adapters on KYA-OS: a self-custody agent enrolled with `helix init`, a
+request proof on every MCP request (`HelixIDToolWrapper` /
+`kyaos.withRequestProof`), and `helixidMCPMiddleware` verifying it in-process.
+Until the KYA-OS SDKs are published it runs against the local SDK checkouts;
+see its README.
 
 ```sh
 pnpm example:middleware:setup
 pnpm example:middleware:langchain
 pnpm example:middleware:mcp
 ```
-
-The setup script writes `examples/framework-middleware/agent/agent.json`, holding only the agent's DID and credential id — no key material, and ignored by that example package. The scripts log DIDs, VC ids, scopes, and verification results.
