@@ -102,6 +102,9 @@ function outcome(response: JsonRpcResponse, consentReused: boolean): CallSpToolR
   return { status: 'ok', consentReused, ...(result['structuredContent'] !== undefined ? { data: result['structuredContent'] as Record<string, unknown> } : {}) };
 }
 
+/** The SP's refusal of a revoked credential: for a stored hop, the user withdrew their consent. */
+const STATUS_REVOKED = 'status_revoked';
+
 export async function callSpTool(options: CallSpToolOptions): Promise<CallSpToolResult> {
   const hop = await currentHop(options);
   const call = await signedCall(options, hop);
@@ -111,7 +114,15 @@ export async function callSpTool(options: CallSpToolOptions): Promise<CallSpTool
     const { challenge } = await kyaos.handleNeedsAuthorization(response.result, options.serviceDid, options.resolveDid, { request: call as { method: string; params: Record<string, unknown> } });
     return { status: 'consent_required', prompt: { authorizationUrl: challenge.authorizationUrl, resumeToken: challenge.resumeToken, scopes: challenge.scopes } };
   }
-  return outcome(response, hop !== undefined);
+  const result = outcome(response, hop !== undefined);
+  if (hop !== undefined && result.status === 'error' && result.error.code === STATUS_REVOKED) {
+    // Withdrawn at the SP (Helix revoked the hops under the user's key) before
+    // the hop was due for renewal: forget it and ask once more without it, so
+    // the SP can ask the user again.
+    await options.consents.drop(options.serviceDid);
+    return callSpTool(options);
+  }
+  return result;
 }
 
 /**
