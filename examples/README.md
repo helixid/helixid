@@ -142,9 +142,12 @@ does.
 
 - [`request-proof.ts`](./request-proof.ts): one call verified through
   `POST /v1/verify`, then the refusals a verifier must make: an action the
-  chain does not allow (`action_not_delegated`), the same proof again
-  (`nonce_replayed`), and a call after the root hop was revoked
-  (`status_revoked`).
+  chain does not allow (`action_not_delegated`) and the same proof again
+  (`nonce_replayed`). Then cached against live status: the same kind of call,
+  each with a fresh proof, verified from the status cache (no `liveStatus`:
+  level L2, which the L3 policy refuses) and with a live read
+  (`liveStatus: true`: L3, accepted). Last, a call after the root hop was
+  revoked (`status_revoked`).
 - [`self-verify.ts`](./self-verify.ts): the service runs every check itself,
   in-process, with `createLocalVerifier` (`@helixid/mcp-middleware`): it reads
   the agent's DID document, keys and card from where they are published, then

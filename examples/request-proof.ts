@@ -18,9 +18,13 @@
 //      with KYA-OS's default policy, L3: it asks for live status reads
 //      (`liveStatus`; a verdict from cached lists is at most L2) and accepts
 //      only a verdict at L3. Accepted, with the effective scopes; then the
-//      refusals a verifier must make: an action the chain does not allow, the
-//      same proof again (replay), and a call made after the root hop was
-//      revoked (story L3-C: status_revoked).
+//      refusals a verifier must make: an action the chain does not allow and
+//      the same proof again (replay);
+//   6. cached against live status: the same kind of call verified once from
+//      the verifier's status cache (no `liveStatus`: at most L2) and once with
+//      a live read (L3), each with a fresh proof; the L3 policy refuses the
+//      cached verdict and accepts the live one;
+//   7. a call made after the root hop was revoked (story L3-C: status_revoked).
 //
 // The other KYA-OS scripts: self-verify.ts (the same checks in-process, step
 // by step), revocation-check.ts (the identity credential revoked and renewed)
@@ -68,8 +72,8 @@ async function main(): Promise<void> {
 
   console.log('[4] the agent signs a request proof with its own key...');
   const sign = (): Promise<SignedCall> => signCall(agent.signer, service.did, chain);
-  const verify = (signed: SignedCall, action: string): Promise<Verdict> =>
-    call<Verdict>('POST', '/v1/verify', { proof: signed.proof, request: signed.request, chain, expectedAudience: service.did, liveStatus: true, action }, false);
+  const verify = (signed: SignedCall, action: string, liveStatus = true): Promise<Verdict> =>
+    call<Verdict>('POST', '/v1/verify', { proof: signed.proof, request: signed.request, chain, expectedAudience: service.did, action, ...(liveStatus ? { liveStatus } : {}) }, false);
 
   console.log('[5] the service verifies it locally (POST /v1/verify)...');
   const first = await sign();
@@ -80,11 +84,28 @@ async function main(): Promise<void> {
   const replay = await verify(first, SCOPE);
   show('the first proof sent again', replay);
 
+  console.log('[6] cached against live status, a fresh proof each time...');
+  await verify(await sign(), SCOPE, false); // fills the verifier's status cache, if this is its first read
+  const cached = await verify(await sign(), SCOPE, false);
+  show('from the status cache (no liveStatus)', cached);
+  const live = await verify(await sign(), SCOPE);
+  show('with a live status read (liveStatus: true)', live);
+  console.log(`    levels: cached ${cached.level}, live ${live.level}`);
+
+  console.log('[7] revoking the root hop...');
   await call('POST', `/v1/vcs/${encodeURIComponent(root.id)}/revoke`, {});
   const afterRevoke = await verify(await sign(), SCOPE);
   show('a new call after the root hop was revoked', afterRevoke);
 
-  finish(acceptable(accepted) && !acceptable(outOfScope) && !acceptable(replay) && !acceptable(afterRevoke), 'four');
+  finish(
+    acceptable(accepted) &&
+      !acceptable(outOfScope) &&
+      !acceptable(replay) &&
+      cached.ok && cached.level === 'L2' && !acceptable(cached) &&
+      acceptable(live) &&
+      !acceptable(afterRevoke),
+    'six',
+  );
 }
 
 main().catch(fail('request-proof'));
