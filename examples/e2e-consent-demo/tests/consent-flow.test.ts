@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ConsentFlowError, kyaos } from '@helixid/sdk-js';
 import { callSpTool, completeConsent, type ConsentPrompt } from '../agent/consentAwareCall.js';
+import { loadSpIdentity } from '../sp-shared/identity.js';
 import { startHarness, type Harness } from './harness.js';
 
 let h: Harness;
@@ -124,5 +125,22 @@ describe('SP activity log', () => {
     const approved = h.airline.audit.find((e) => e['event'] === 'authorization.approved');
     expect(approved?.['agentDid']).toBe(h.agentDid);
     expect(String(approved?.['userDid'])).toMatch(/^did:key:/);
+  });
+});
+
+describe('withdrawal', () => {
+  it('the SP withdraws the consent: the next call asks the user again instead of failing on the revoked hop', async () => {
+    const held = await h.consents.get(h.airline.serviceDid);
+    expect(held).toBeDefined();
+    const identity = await loadSpIdentity(h.workDir, 'airline');
+    const spSigner = new kyaos.EnvSigner({ did: identity.did, envVar: 'SP_KEY', env: { SP_KEY: identity.signingKey } });
+    const withdrawn = await kyaos.consent.withdrawConsent({ helixUrl: h.helixApiUrl, signer: spSigner, consentId: held!.consentId });
+    expect(withdrawn.withdrawn).toContain(held!.consentId);
+
+    const challengesBefore = h.airline.spApp.counters.consentRequired;
+    const result = await callSpTool(h.callOptions(h.airline, 'book_flight', { flightId: 'HA303' }));
+    expect(result.status, JSON.stringify(result)).toBe('consent_required');
+    expect(h.airline.spApp.counters.consentRequired).toBe(challengesBefore + 1);
+    expect(await h.consents.get(h.airline.serviceDid)).toBeUndefined();
   });
 });
