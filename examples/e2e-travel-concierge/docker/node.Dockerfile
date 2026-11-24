@@ -28,9 +28,10 @@ RUN corepack install
 
 COPY examples/e2e-travel-concierge examples/e2e-travel-concierge
 
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --no-frozen-lockfile --filter @helixid/example-e2e-travel-concierge
-
 WORKDIR /repo/examples/e2e-travel-concierge
+# Installed on its own: the demo pins the KYA-OS releases, and stays out of the
+# root workspace (pnpm-workspace.yaml) until they are published.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --ignore-workspace --no-frozen-lockfile
 # Default command; docker-compose overrides it with `pnpm setup|mcp|agent`.
 CMD ["pnpm", "run", "agent"]

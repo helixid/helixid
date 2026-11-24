@@ -4,13 +4,12 @@
 # outcome sentence -- the model does, from the real tool result -- so the
 # reply reflects a cryptographically enforced decision, not a canned string.
 #
-# Every tool call is made *as the selected persona*: the API signs its VP.
+# Every tool call is made *as the selected persona*: its own key signs the request proof.
 # History is keyed by (conversation_id, persona_id) so one agent's context
 # can never silently leak into another's.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from typing import Dict, List
 
@@ -27,11 +26,11 @@ _conversations: Dict[str, List[LLMMessage]] = {}
 def _run_tool(persona: Persona, tool_name: str, args: dict):
     if tool_name == TOOLS["BOOK"]:
         result = book_flight(persona, str(args.get("flightId", "")), str(args.get("passengerName", "")))
-        return dataclasses.asdict(result)
+        return result.to_dict()
     if tool_name == TOOLS["SEARCH"]:
         date = args.get("date")
         result = search_flights(persona, str(args.get("origin", "")), str(args.get("destination", "")), str(date) if date else None)
-        return dataclasses.asdict(result)
+        return result.to_dict()
     return {"error": f"Unknown tool: {tool_name}"}
 
 

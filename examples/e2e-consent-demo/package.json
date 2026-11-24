@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Standalone consent demo: two independent Service Providers issue DelegationGrantCredentials from their own did:web identities, and a Travel Planner agent reuses a standing grant on its second booking with the same SP.",
+  "description": "Standalone consent demo on KYA-OS: two independent Service Providers (self custody, did:web hosted by HelixID) ask a traveler's consent on HelixID's consent page, where her own did:key signs the root hop of a self-custody agent's chain; the second booking with the same SP reuses it.",
   "scripts": {
     "setup": "tsx seed/seed.ts",
     "sp:airline": "tsx sp-airline/server.ts",
@@ -11,15 +11,13 @@
     "agent": "tsx agent/server.ts",
     "test": "vitest run",
     "test:non-live": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "sync-mirrors": "node scripts/sync-mirrors.mjs",
-    "pretest": "node scripts/sync-mirrors.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
     "@google/genai": "^2.15.0",
-    "@helixid/sdk-js": "^0.4.0",
-    "@helixid/widget": "^0.1.0",
+    "@helixid/mcp-middleware": "^1.0.0",
+    "@helixid/sdk-js": "^1.0.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "openai": "^4.77.0",

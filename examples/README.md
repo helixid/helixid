@@ -22,11 +22,19 @@ cp .env.example .env     # set LLM_API_KEY if the demo needs one
 docker compose up --build
 ```
 
+> **The four demos below need the KYA-OS releases.** They are ported to
+> KYA-OS (request proofs and delegation chains, verified in-process; consent
+> on Helix's consent page) against `@helixid/core` 3.x with KYA-OS,
+> `@helixid/sdk-js` 1.0, `@helixid/mcp-middleware` 1.0 and `helixid-sdk-py` 3.0.
+> Until those are published, `docker compose up` builds against older
+> packages and the demos don't run; each demo's README shows how to run it
+> against local checkouts meanwhile.
+
 | Demo | Language | What it proves | LLM key |
 |---|---|---|---|
-| [`e2e-travel-concierge`](./e2e-travel-concierge) | TypeScript | An LLM agent enrolls, gets a real credential, and an MCP tool refuses to run until the presentation verifies | required |
+| [`e2e-travel-concierge`](./e2e-travel-concierge) | TypeScript | A self-custody LLM agent signs a request proof per call; the MCP service verifies it and the agent's chain in-process before a tool runs | required |
 | [`e2e-travel-concierge-py`](./e2e-travel-concierge-py) | Python | Same flow through `helixid-sdk-py` | required |
-| [`e2e-consent-demo`](./e2e-consent-demo) | TypeScript | Two independent Service Providers issue their own grants; the second booking with the same SP reuses the standing grant instead of re-prompting | optional |
+| [`e2e-consent-demo`](./e2e-consent-demo) | TypeScript | Two independent Service Providers each ask the user's consent on Helix's consent page, where the user's own key signs the agent's root hop; the second booking with the same SP reuses it instead of re-prompting | optional |
 | [`e2e-consent-demo-py`](./e2e-consent-demo-py) | Python | Same flow through `helixid-sdk-py` | optional |
 
 **How the demos are wired.** Every demo builds `helix-api` from this repo's
@@ -40,7 +48,7 @@ its own nginx server block, which same-origin-proxies `/v1` to `helix-api`
 because the demo API ships without CORS.
 
 SDK packages resolve as ordinary dependencies during the image build:
-`@helixid/sdk-js` / `@helixid/mcp` / `@helixid/widget` from npm, and
+`@helixid/sdk-js` / `@helixid/mcp-middleware` from npm, and
 `helixid-sdk-py` from PyPI. Nothing is vendored from a sibling directory.
 
 ## Where each demo listens
@@ -78,7 +86,7 @@ for a steadier run.
 
 If the provider is down and you want to confirm the trust layer still works,
 the travel-concierge demos ship a check with no LLM in the loop — call the
-protected tool with no presentation and watch HelixID refuse it:
+protected tool with no request proof and watch the service refuse it:
 
 ```sh
 curl -s http://localhost:7100/mcp \
@@ -86,13 +94,14 @@ curl -s http://localhost:7100/mcp \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
        "params":{"name":"book_flight","arguments":{"flightId":"BA249","passengerName":"Mallory"}}}'
-# → "Refused by HelixID: no verifiable presentation was supplied."
+# → "Refused by HelixID [PROOF_MISSING]: no request proof was supplied."
 ```
 
-**A booking is refused with `VC_EXPIRED`.** The demo credential has a limited
-lifetime, and the setup step skips re-enrolment when the persona already
-exists — so a stack you started days ago keeps presenting the stale credential.
-Reset it:
+**A booking is refused with `STATUS_REVOKED` after a long pause.** A
+self-custody agent's own status list (it signs its delegation hops) lapses
+after the API's status-list lifetime unless the agent re-signs it; the demos
+re-sign before each call, but a stack left for days may still hold stale
+state. Reset it:
 
 ```sh
 docker compose down -v && docker compose up --build
@@ -101,9 +110,9 @@ docker compose down -v && docker compose up --build
 `down -v` is also the right reset any time a demo's state looks wrong; all demo
 state lives in those volumes.
 
-**The consent popup never returns.** The Service Provider opens its consent
-page in a popup and hands the signed grant back to the page that opened it, so
-the demo needs popups allowed for `localhost` and the chat tab left open.
+**The consent popup never opens.** The agent opens Helix's consent page in a
+popup and waits for the decision there, so the demo needs popups allowed for
+`localhost` and the chat tab left open.
 
 **The build fails partway through an install** with a socket or TLS error. The
 SDK packages are installed as git dependencies, which run nested installs and

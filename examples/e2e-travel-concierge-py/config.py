@@ -20,9 +20,10 @@ TOOLS = {
 
 PROTECTED_TOOL = TOOLS["BOOK"]
 
-TARGET_SERVICE = "travel-booking-mcp"
-
-USER_DID = "did:web:demo-traveler"
+# The Service Provider the MCP server plays: enrolled once on HelixID (self
+# custody; its key on the shared volume). Request proofs name its DID as the
+# audience and hops name it as the target.
+SERVICE_NAME = "Helix Air (travel concierge)"
 
 INITIAL_PERSONA = {
     "id": "concierge",
@@ -55,6 +56,7 @@ class Env:
     admin_api_key: str
     wallets_dir: str
     persona_manifest_path: str
+    service_identity_path: str
     mcp_server_url: str
     mcp_port: int
     agent_port: int
@@ -66,10 +68,11 @@ class Env:
         return _required("LLM_API_KEY")
 
 
-def agent_identity_path(persona_id: str) -> str:
-    """Where a persona's onboarding result is recorded. Server custody: no
-    wallet file, no passphrase, no local key material."""
-    return os.path.join(env.wallets_dir, f"{persona_id}.agent.json")
+def key_dir_for(persona_id: str) -> str:
+    """A persona's own key directory on the shared volume: helix init writes its
+    DID document, card, summary and signing-key.env there. Self custody: the key
+    never leaves it."""
+    return os.path.join(env.wallets_dir, persona_id)
 
 
 def _load_env() -> Env:
@@ -79,6 +82,7 @@ def _load_env() -> Env:
         admin_api_key=os.environ.get("HELIX_ADMIN_API_KEY", "dev-admin-key-change-in-production"),
         wallets_dir=wallets_dir,
         persona_manifest_path=os.path.join(wallets_dir, "personas.json"),
+        service_identity_path=os.path.join(wallets_dir, "mcp-service.json"),
         mcp_server_url=os.environ.get("MCP_SERVER_URL", "http://mcp-server:7100/mcp"),
         mcp_port=int(os.environ.get("MCP_PORT", "7100")),
         agent_port=int(os.environ.get("AGENT_PORT", "4000")),

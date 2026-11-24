@@ -1,59 +1,71 @@
-# examples/e2e-consent-demo-py — Python-SDK (helix-sdk-py) port of
-# examples/e2e-consent-demo. Same trust flow, same route contracts, same
-# static frontend/widget assets -- only the agent and the two Service
-# Providers are reimplemented, since those are the services that actually
-# call the SDK (@helixid/sdk-js there, helix-sdk-py here). Console and
-# helix-api are unchanged JS.
+# examples/e2e-consent-demo-py — the consent demo with helix-sdk-py: the agent
+# and the two Service Providers are Python, helix-api and the Console are the
+# same as the TypeScript demo's. Ports are offset so both demos run side by
+# side.
 #
+#   cp .env.example .env
 #   docker compose up --build
 #
+# Needs the KYA-OS releases of @helixid/core and helixid-sdk-py: see README.md.
+#
 # Then open:
-#   Travel Planner  : http://localhost:4200
-#   Airline consent : http://localhost:4201/consent
-#   Hotel consent   : http://localhost:4202/consent
-#   Console (audit) : http://localhost:8081   (login admin / admin)
+#   Travel Planner  : http://localhost:4200   (traveler / demo123)
+#   Console (audit) : http://localhost:8081   (admin / admin)
 #
-# Reset everything (fresh wallets + DB):  docker compose down -v
+# Reset everything (fresh keys + DB):  docker compose down -v
 #
-# Ports are offset from e2e-consent-demo's (410x/8080/3000) so both can run
-# side by side for comparison.
+# Startup order: helix-api -> seed -> sp-airline + sp-hotel -> agent
 name: helixid-consent-demo-py
 
+# The SPs and the agent share helix-api's network namespace: did:web DIDs
+# hosted by HelixID encode localhost:3001, which then resolves to the API
+# inside the stack exactly as it does from the browser.
 x-python-service: &python-service
   build:
     context: ../..
     dockerfile: examples/e2e-consent-demo-py/docker/python.Dockerfile
   restart: unless-stopped
   working_dir: /repo/examples/e2e-consent-demo-py
+  network_mode: "service:helix-api"
+
+x-python-env: &python-env
+  HELIX_API_URL: http://localhost:3001
+  HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
+  WALLETS_DIR: /wallets
+  DEMO_HOST: localhost
+  AIRLINE_PORT: "4201"
+  HOTEL_PORT: "4202"
+  CONSENT_WINDOW_SECONDS: ${CONSENT_WINDOW_SECONDS:-2592000}
+  CONSENT_HOP_LIFETIME_SECONDS: ${CONSENT_HOP_LIFETIME_SECONDS:-3600}
 
 services:
+  # ── HelixID API: hosts the DID documents, issues the agent's identity and
+  # attestations, and serves the consent page where the user's key signs.
+  # It listens on 3001 inside too, so the URLs it hands out work from the browser.
   helix-api:
     build:
       context: ../..
       dockerfile: Dockerfile
     ports:
-      - "3001:3000"
+      - "3001:3001"
+      - "4200:4200"
+      - "4201:4201"
+      - "4202:4202"
     environment:
       NODE_ENV: development
-      PORT: "3000"
+      PORT: "3001"
       HELIX_STORAGE_ADAPTER: sqlite
       HELIX_SQLITE_PATH: /app/data/helixid.sqlite
-      API_BASE_URL: http://helix-api:3000
-      DID_METHOD: key
-      HELIX_ISSUER_DID: did:key:z6MkgHKqmKyCQroyo3RVx3gM1LXwUNwzZkynmsqwhYNqNjdn
+      API_BASE_URL: http://localhost:3001
+      DID_METHOD: web
+      DID_DOMAIN: localhost:3001
       HELIX_SIGNING_KEY: 11deb8f4b8f2e1c0a9d7c6b5a4938271605f4e3d2c1b0a998877665544332211
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
       AUDIT_LOG_DESTINATION: both
-      # Same fix as e2e-consent-demo's helix-api: the SPs' did:web identities
-      # encode host "localhost" for the browser's benefit, which means
-      # nothing resolvable from *inside* this container -- redirect just
-      # that fetch to the Docker-Desktop-provided hostname that routes back
-      # out to the host's published ports. See did-resolver.ts.
-      DID_WEB_LOOPBACK_RESOLVE_HOST: host.docker.internal
     volumes:
       - helix_data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -74,19 +86,14 @@ services:
       helix-api:
         condition: service_healthy
 
+  # ── Run-once: enrolls both SPs and the agent (self custody: each key is generated here).
   seed:
     <<: *python-service
     restart: "no"
     command: ["python", "-m", "seed.seed"]
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
+      <<: *python-env
       CONSOLE_URL: http://localhost:8081
-      AIRLINE_PORT: "4201"
-      HOTEL_PORT: "4202"
     volumes:
       - wallets:/wallets
     depends_on:
@@ -96,15 +103,8 @@ services:
   sp-airline:
     <<: *python-service
     command: ["python", "-m", "sp_airline.server"]
-    ports:
-      - "4201:4201"
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
-      AIRLINE_PORT: "4201"
+      <<: *python-env
     volumes:
       - wallets:/wallets
     healthcheck:
@@ -120,15 +120,8 @@ services:
   sp-hotel:
     <<: *python-service
     command: ["python", "-m", "sp_hotel.server"]
-    ports:
-      - "4202:4202"
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
-      HOTEL_PORT: "4202"
+      <<: *python-env
     volumes:
       - wallets:/wallets
     healthcheck:
@@ -144,19 +137,11 @@ services:
   agent:
     <<: *python-service
     command: ["python", "-m", "agent.server"]
-    ports:
-      - "4200:4200"
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
+      <<: *python-env
       AGENT_PORT: "4200"
-      AIRLINE_PORT: "4201"
-      HOTEL_PORT: "4202"
-      AIRLINE_URL: http://sp-airline:4201
-      HOTEL_URL: http://sp-hotel:4202
+      AIRLINE_URL: http://localhost:4201
+      HOTEL_URL: http://localhost:4202
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}

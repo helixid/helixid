@@ -1,6 +1,6 @@
 # book_flight -- requires the write:orders scope. The Concierge persona has
 # it; the Search Agent does not, so the same call succeeds for one and is
-# refused by HelixID for the other. Python port of ../../.../bookFlight.ts.
+# refused by the service's KYA-OS verifier for the other. Python port of ../../.../bookFlight.ts.
 
 from __future__ import annotations
 

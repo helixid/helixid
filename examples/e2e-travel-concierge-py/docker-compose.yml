@@ -1,10 +1,14 @@
 # examples/e2e-travel-concierge-py -- Python-SDK (helix-sdk-py) port of
 # examples/e2e-travel-concierge. Same trust flow, same route contracts --
 # only the agent and the mcp-server are reimplemented, since those are the
-# services that actually call the SDK (@helixid/sdk-js + @modelcontextprotocol/sdk
-# there, helix-sdk-py + the official `mcp` package here). web/, helixid-setup,
+# services that actually call the SDK (@helixid/sdk-js + @helixid/mcp-middleware
+# there, helix-sdk-py + helix_mcp_middleware here). web/, helixid-setup,
 # helix-api, and Console stay unchanged JS/TS -- reused directly from
 # ../e2e-travel-concierge, not copied.
+#
+# Needs the KYA-OS releases (@helixid/core, @helixid/sdk-js 1.0,
+# @helixid/mcp-middleware 1.0, helixid-sdk-py 3.0): until they are published,
+# run the processes against local packages (see README).
 #
 #   cp .env.example .env      # then put your LLM_API_KEY in it
 #   docker compose up --build
@@ -13,7 +17,7 @@
 #   Web (agent chat): http://localhost:8091
 #   Console (audit):  http://localhost:8082   (login admin / admin)
 #
-# Reset everything (fresh wallet + DB):  docker compose down -v
+# Reset everything (fresh keys + DB):  docker compose down -v
 #
 # Ports are offset from e2e-travel-concierge's (3000/8080/7100/4000/8090) so
 # both can run side by side for comparison.
@@ -40,8 +44,10 @@ services:
       HELIX_STORAGE_ADAPTER: sqlite
       HELIX_SQLITE_PATH: /app/data/helixid.sqlite
       API_BASE_URL: http://helix-api:3000
-      DID_METHOD: key
-      HELIX_ISSUER_DID: did:key:z6MkgHKqmKyCQroyo3RVx3gM1LXwUNwzZkynmsqwhYNqNjdn
+      # did:web: HelixID hosts each self-custody agent's and the service's DID
+      # document under the internal DNS name, reachable from every container.
+      DID_METHOD: web
+      DID_DOMAIN: helix-api:3000
       HELIX_SIGNING_KEY: 11deb8f4b8f2e1c0a9d7c6b5a4938271605f4e3d2c1b0a998877665544332211
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
       AUDIT_LOG_DESTINATION: both
@@ -72,9 +78,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Seeder (run once, then exits 0), unchanged JS build -- its wallet
-  # output is byte-for-byte compatible with helix-sdk-py's wallet format, so
-  # the Python agent below loads it directly. ────────────────────────────
+  # ── Seeder (run once, then exits 0), unchanged JS build -- it enrolls the
+  # service and the Concierge (self custody: keys on the shared volume) and
+  # writes the persona manifest, all in a format the Python services read
+  # directly. ──────────────────────────────────────────────────────────────
   helixid-setup:
     build:
       context: ../..
@@ -88,14 +95,13 @@ services:
       HELIX_API_URL: http://helix-api:3000
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
       WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
     volumes:
       - wallets:/wallets
     depends_on:
       helix-api:
         condition: service_healthy
 
-  # ── MCP server (guards book_flight/search_flights with helix_mcp) ──────
+  # ── MCP server (guards both tools with the KYA-OS local verifier) ──────
   mcp-server:
     <<: *python-service
     command: ["python", "-m", "mcp_server.server"]
@@ -104,6 +110,10 @@ services:
     environment:
       HELIX_API_URL: http://helix-api:3000
       MCP_PORT: "7100"
+      # The service's own key, written by the seeder.
+      WALLETS_DIR: /wallets
+    volumes:
+      - wallets:/wallets
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7100/health')"]
       interval: 5s
@@ -135,7 +145,6 @@ services:
       MCP_SERVER_URL: http://mcp-server:7100/mcp
       AGENT_PORT: "4000"
       WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
     volumes:
       - wallets:/wallets
     healthcheck:

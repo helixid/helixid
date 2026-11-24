@@ -3,7 +3,7 @@
 // does, from the real tool result — so the reply reflects a cryptographically
 // enforced decision, not a canned string.
 //
-// Every tool call is made *as the selected persona*: its wallet signs the VP.
+// Every tool call is made *as the selected persona*: its own key signs the request proof.
 // History is keyed by (conversationId, personaId) so one agent's context can
 // never silently leak into another's.
 import { getProvider } from './providers/index.js';
