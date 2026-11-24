@@ -5,14 +5,6 @@ There are two kinds of examples here: **full demos you run with Docker**, and
 
 ## Full demos (Docker, one command)
 
-> **The four demos below wait for the L3-H examples port** (a follow-up PR):
-> they still present Helix VPs (`signVP`, `/v1/vp/verify`, `delegateAuthority`,
-> `/v1/onboard`), which KYA-OS retired, and they install the published SDKs,
-> which predate KYA-OS. Until then they do not run against this repo's API.
-> [`e2e-screenshots`](./e2e-screenshots), the Playwright walkthrough of these
-> demos' UIs, waits with them: it has no VP code of its own, only the demos'
-> screens and scenario buttons, which that port reshapes.
-
 Each of these is self-contained. You need this repo and Docker — no second
 checkout, no pre-built sibling packages, no registry credentials:
 
@@ -146,9 +138,63 @@ shows the refusals a verifier must make: an action the chain does not allow
 (`action_not_delegated`), the same proof again (`nonce_replayed`), and a call
 after the root hop was revoked (`status_revoked`).
 
-It replaces the VP-era scripts (`verify-vp*`, `self-verify`, `scope-check`,
-`revocation-check`, `verifier-*`, `delegation-demo`): `/v1/vp/verify`, `signVP`,
-VP sessions and `delegateAuthority` are retired with no backward compatibility.
+## Scripts (local API): VP era, under review
+
+> These scripts use retired VP APIs and are under review.
+
+Start the API first:
+
+```sh
+set -a; source .env; set +a
+pnpm --filter @helixid/api start
+```
+
+Verifier examples now mint fresh credentials and sign fresh VPs automatically (no fixture file needed).
+
+Then run:
+
+```sh
+pnpm example:verify-vp
+pnpm example:verify-vp:sdk
+pnpm example:verify-vp:session-bridge
+pnpm example:scope-check
+pnpm example:self-verify
+pnpm example:revocation-check
+```
+
+## Verifier fast-path patterns (both supported)
+
+### Path A — Verifier-issued JWT session
+
+```sh
+JWT_SECRET=replace-with-a-strong-secret \
+pnpm --filter @helixid/api exec tsx ../examples/verifier-session-cycle.ts
+```
+
+Flow: verify VP once → issue verifier-owned JWT → subsequent calls verify JWT locally until TTL expiry.
+
+### Path B — VP-result caching (no JWT)
+
+```sh
+pnpm --filter @helixid/api exec tsx ../examples/verifier-vp-cache-cycle.ts
+```
+
+Flow: verify VP once → cache verification result by `vpId` with TTL → subsequent calls with same `vpId` are cache hits.
+
+In both paths, the verifier owns policy/infrastructure decisions (scope checks, replay/cache store, TTLs, headers, and secrets).
+
+`verify-vp` creates a fresh VP and verifies it via `/v1/vp/verify`.
+
+`verify-vp:sdk` creates a fresh VP and verifies it locally (no `/v1/vp/verify` call).
+
+`verify-vp:session-bridge` creates a fresh VP, calls `/v1/vp/verify` with `session: true`, and verifies the returned JWT using `/v1/sessions/public-key`.
+
+`verify-vp-session-bridge` uses `HELIX_API_URL` (or `API_BASE_URL`) as-is for API calls.
+`verify-vp:sdk` performs local verification and still fetches DID/status resources referenced by the credential as needed.
+
+`scope-check` is the authorization-only subset (scope + target-service checks on an already verified, active payload).
+
+`revocation-check` is self-contained: it onboards a fresh credential, revokes it, verifies the status bit flip, then onboards a replacement credential.
 
 ## Real Framework Middleware
 
