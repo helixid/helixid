@@ -1,11 +1,6 @@
 packages:
   - '.'
   - 'examples/*'
-  # Ported to KYA-OS against @helixid/sdk-js 1.0 and @helixid/mcp-middleware 1.0,
-  # which are not published yet: out of the workspace (and its frozen lockfile)
-  # until the KYA-OS release; their Docker builds install them on their own.
-  - '!examples/e2e-consent-demo'
-  - '!examples/e2e-travel-concierge'
   - 'examples'
   - 'e2e'
 
