@@ -72,6 +72,8 @@ export async function createGate(options: GateOptions): Promise<Gate> {
     serviceDid: options.serviceDid,
     catalog: options.catalog,
     allowLoopbackHttp: options.allowLoopbackHttp,
+    // Every scope here is the user's: an agent gets it only through the user's consent, never on its own authority.
+    allowOwnAuthority: false,
     ...(statusListIssuers === undefined ? {} : { statusListIssuers }),
     log: () => undefined,
   });

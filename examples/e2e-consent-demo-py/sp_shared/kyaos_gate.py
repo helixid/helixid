@@ -76,6 +76,8 @@ class Gate:
         self.service_did = service_did
         self._signer = EnvSigner(service_did, kid="key-1", env_var="SP_KEY", env={"SP_KEY": signing_key})
         settings: Dict[str, Any] = {
+            # Every scope here is the user's: an agent gets it only through the user's consent, never on its own authority.
+            "allow_own_authority": False,
             "service_did": service_did,
             "catalog": list(catalog),
             "allow_loopback_http": allow_loopback_http,
