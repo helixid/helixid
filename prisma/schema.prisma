@@ -15,7 +15,7 @@ datasource db {
 model Did {
   id                   String      @id
   subjectType          String
-  controller           String
+  controller           String?
   publicKey            String
   publicKeyMultibase   String?
   hederaTopicId        String      @default("")
@@ -435,4 +435,14 @@ model UserConsent {
   @@index([userDid])
   @@index([serviceDid, serviceUserRef])
   @@map("user_consents")
+}
+
+/// Registry v3: the "Make discoverable" choice an agent was onboarded with (default on).
+model RegistryEntry {
+  did          String   @id
+  discoverable Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("registry_entries")
 }

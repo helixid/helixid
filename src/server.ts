@@ -46,6 +46,12 @@ import {
   DIDService,
   EnvSigner,
   didWebRoutes,
+  registryRoutes,
+  RegistryEntryRepository,
+  RegistryService,
+  HelixRegistryPublisher,
+  deploymentRegistrySource,
+  helixRegistryOrigin,
   errorHandler,
   entityCardRoutes,
   eventRoutes,
@@ -88,6 +94,7 @@ import {
   type Signer,
 } from '@helixid/core';
 import { SelfCustodyOnlyKeyStore, selfCustodyAuthorize } from './self-custody.js';
+import { registryOnboarding } from './registry.js';
 
 const config = loadConfigFromEnv();
 const storageAdapter =
@@ -262,7 +269,7 @@ const custodyService = new CustodyService({
   host: config.DID_DOMAIN,
   didCache,
   recheck: custodyRecheckSettings(config),
-  credentialDetails: credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did) }),
+  credentialDetails: credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did), omitResponsibleParty: true }),
   // KYA-OS story C-E: a self-custody agent rotates its key with the SDK's rotateKey();
   // both keys stay listed for KEY_ROTATION_OVERLAP_SECONDS, and its leaf hops are reissued.
   rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
@@ -298,10 +305,25 @@ const consentService = new ConsentService({
   maxWindowSeconds: config.CONSENT_MAX_WINDOW_SECONDS,
 });
 // Cards of agents acting on user consent leave responsibleParty out (L3-H): each chain's root is its own.
-const consentCardDetails = credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did) });
+// Own authority (four-clients, 2026-11-24): agent cards name no responsibleParty, so an agent may call a
+// service that opts in on its own attested capabilities; a chain it carries is checked against its own root.
+const consentCardDetails = credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did), omitResponsibleParty: true });
 
 // Own-hosted agents waiting for their documents are re-checked in the background.
 const custodyRecheck = new CustodyRecheckScheduler(custodyService, { tickSeconds: config.CUSTODY_RECHECK_TICK_SECONDS });
+
+// Registry v3: "Make discoverable" at onboarding, and the Helix agent registry (fixed origin; a local run
+// overrides it with a test-only variable). helixid holds no key, so a discoverable agent's holder registers it
+// there with the SDK.
+const registryEntryRepository = new RegistryEntryRepository(prisma, sqlite);
+const helixRegistryPublisher = new HelixRegistryPublisher({
+  deployment: config.API_BASE_URL,
+  helixOrigin: helixRegistryOrigin(),
+  signerFor: async () => undefined,
+  log: (message) => console.info(`[registry] ${message}`),
+});
+const onboarding = registryOnboarding({ entries: registryEntryRepository, publisher: helixRegistryPublisher });
+const selfCustodyAuthorizer = selfCustodyAuthorize(config.HELIX_ADMIN_API_KEY);
 
 const app = Fastify({
   logger: {
@@ -391,6 +413,19 @@ async function ensureIssuerDidCached(): Promise<void> {
 
 await app.register(didRoutes, { didService });
 await app.register(didWebRoutes, { issuerDid: config.HELIX_ISSUER_DID, didDomain: config.DID_DOMAIN, didRepository });
+// Registry v3 (2026-11-24): GET /agent/registry/:did for this deployment's discoverable agents, which the
+// Helix registry checks a registration against. The registry itself is the Helix one. See registry.ts.
+await app.register(registryRoutes, {
+  registry: new RegistryService(
+    deploymentRegistrySource({
+      deployment: config.API_BASE_URL,
+      owner: { did: config.HELIX_ISSUER_DID, name: null },
+      entries: registryEntryRepository,
+      custody: custodyService,
+      didRepository,
+    }),
+  ),
+});
 await app.register(vcRoutes, {
   prefix: '/v1/vcs',
   vcService,
@@ -452,7 +487,13 @@ await app.register(serviceProviderRoutes, {
 await app.register(custodyRoutes, {
   prefix: '/v1',
   custodyService,
-  authorize: selfCustodyAuthorize(config.HELIX_ADMIN_API_KEY),
+  authorize: async (request, action) => {
+    await selfCustodyAuthorizer(request, action);
+    if (action.action === 'createAgent') onboarding.check(request);
+  },
+  // Registry v3: the "Make discoverable" choice; a discoverable agent is registered with the Helix registry once active.
+  onCreated: (request, result) => (result.subjectType === 'agent' ? onboarding.created(request, result.did) : undefined),
+  onActivated: (_request, result) => onboarding.activated(result),
   // A POST /v1/agents body with enrollmentToken is story F-1's token onboarding, unchanged.
   enrollmentOnboarding: enrollmentOnboardingHandler(agentService),
   // KYA-OS story C-E point 5: an ancestor issuer of an agent's delegations may revoke its compromised key.
