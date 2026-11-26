@@ -79,7 +79,8 @@ describe('Self-custody onboarding and hosted cards Live Integration', () => {
     const card = await hosted(challenge.body['cardUrl']);
     expect(card.status, JSON.stringify(card.body)).toBe(200);
     expect(card.body['id']).toBe(did);
-    expect(card.body['responsibleParty']).toBe(ownerDid);
+    // Own authority (registry v3): no agent card names a responsibleParty, so a service may accept the agent on its own attested capabilities.
+    expect(card.body['responsibleParty']).toBeUndefined();
     expect(card.body['revocation']).toBeDefined();
     const capabilities = card.body['capabilities'] as { name: string; attestations: { vc: { type: string[] } }[] }[];
     const ordersRead = capabilities.find((entry) => entry.name === 'orders:read');
