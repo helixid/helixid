@@ -1,32 +1,31 @@
-// Thin MCP client. The agent is a real MCP client talking to the real MCP server
-// over Streamable HTTP. One fresh client per call keeps it simple against the
-// stateless server.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+// The agent's MCP tools/call: JSON-RPC over HTTP to the MCP server, sent as
+// built. The request proof covers the call exactly as sent, so no client
+// library rewrites it on the way.
 import { env } from '../config.js';
+
+export interface McpCall {
+  method: string;
+  params: Record<string, unknown>;
+}
 
 export interface McpToolResult {
   isError: boolean;
   text: string;
-  structured?: unknown;
+  structured?: Record<string, unknown>;
 }
 
-export async function callMcpTool(
-  name: string,
-  args: Record<string, unknown>,
-): Promise<McpToolResult> {
-  const transport = new StreamableHTTPClientTransport(new URL(env.mcpServerUrl));
-  const client = new Client({ name: 'travel-concierge-agent', version: '0.1.0' });
-  await client.connect(transport);
-  try {
-    const result = await client.callTool({ name, arguments: args });
-    const content = Array.isArray(result.content) ? result.content : [];
-    const text = content
-      .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-      .map((c) => c.text)
-      .join('\n');
-    return { isError: result.isError === true, text, structured: result.structuredContent };
-  } finally {
-    await client.close();
-  }
+export async function sendMcpCall(call: McpCall): Promise<McpToolResult> {
+  const res = await fetch(env.mcpServerUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...call }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { result?: Record<string, unknown>; error?: { message?: string } };
+  if (!body.result) return { isError: true, text: body.error?.message ?? `MCP call failed: HTTP ${res.status}` };
+  const content = Array.isArray(body.result['content']) ? (body.result['content'] as { type?: string; text?: string }[]) : [];
+  return {
+    isError: body.result['isError'] === true,
+    text: content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n'),
+    ...(body.result['structuredContent'] !== undefined ? { structured: body.result['structuredContent'] as Record<string, unknown> } : {}),
+  };
 }

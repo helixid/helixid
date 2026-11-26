@@ -1,24 +1,21 @@
 // Travel Planner Agent.
 //
-// The agent calls SP tools. It has no consent logic of its own: when an SP
-// answers "not without a grant", the agent hands the user off to that SP's
-// consent page and waits for the grant to come back.
+// The agent keeps its own key (self custody, seed/seed.ts ran helix init):
+// it signs every request proof itself; Helix never holds its key. It has no consent
+// logic of its own: when an SP answers with the signed needs_authorization
+// challenge, the agent checks the SP's response proof and hands the user the
+// consent URL, which is Helix's consent page (KYA-OS story L3-H). There the
+// user's own did:key signs the root hop of the agent's chain.
 //
-// The agent holds no wallet and no key. Agent self-custody is retired, so it
-// knows only its own DID (recorded by the seeder), asks the API to sign every
-// presentation, and reads its grants from the platform, which records them
-// when the issuing SP finalizes them.
+// The browser flow:
+//   1. POST /api/call             -> { status: 'consent_required', consentUrl, pendingId }
+//   2. the UI opens consentUrl (Helix's page, on Helix's origin)
+//   3. the UI calls POST /api/consent/complete { pendingId }: the agent waits
+//      for the user's decision, keeps the signed root hop and retries the call
+//      with the resume token and the hop
 //
-// How the grant becomes usable in the browser flow:
-//   1. POST /api/call     -> { status: 'consent_required', consentUrl }
-//   2. the UI opens consentUrl (the SP's own page, on the SP's own origin)
-//   3. the page posts the signed grant back via postMessage
-//   4. the UI forwards it to POST /api/grants, which acknowledges it -- the
-//      platform already holds it, so there is nothing agent-side to store
-//   5. the UI retries POST /api/call, which now finds the grant and succeeds
-//
-// Step 5 of the demo flow short-circuits all of that: /api/call finds the
-// existing standing grant on the first attempt.
+// Step 4 of the demo flow short-circuits all of that: /api/call carries the
+// stored hop on the first attempt (renewed without a click when due).
 //
 // Tool planning is provider-neutral: Gemini, OpenAI, or Anthropic when a key
 // is configured, with a deterministic scripted fallback when it is not.
@@ -26,19 +23,12 @@
 import 'dotenv/config';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { HelixClient } from '@helixid/sdk-js';
-import type { SignedVC } from '@helixid/sdk-js';
-import {
-  AIRLINE,
-  DEMO_USER_DID,
-  HOTEL,
-  agentIdentityPath,
-  env,
-  spDidFor,
-  type AgentIdentity,
-} from '../helixid-config/index.js';
-import { callSpTool, ConsentDeclinedError } from './consentAwareCall.js';
+import { ConsentFlowError, kyaos } from '@helixid/sdk-js';
+import { AIRLINE, DEMO_SERVICE_USER, HOTEL, agentDir, allowLoopbackHttp, env } from '../helixid-config/index.js';
+import { callSpTool, completeConsent, type CallSpToolOptions, type ConsentPrompt } from './consentAwareCall.js';
+import { ConsentStore } from './consentStore.js';
 import { agentPageHtml } from './web.js';
 import {
   createToolPlanner,
@@ -78,6 +68,19 @@ function log(message: string): void {
   console.log(`[${new Date().toISOString()}] [agent] ${message}`);
 }
 
+/** Each SP's platform-minted did:web, read from its /health -- the SPs must be up before the agent. */
+async function resolveSpDids(): Promise<Record<keyof typeof SP_BY_ID, string>> {
+  const [airline, hotel] = await Promise.all(
+    [env.airlineUrl, env.hotelUrl].map(async (url) => {
+      const response = await fetch(`${url}/health`).catch(() => null);
+      const body = response?.ok ? ((await response.json()) as { did?: string }) : null;
+      if (!body?.did) throw new Error(`SP at ${url} is not up -- start sp:airline and sp:hotel first.`);
+      return body.did;
+    }),
+  );
+  return { airline: airline!, hotel: hotel! };
+}
+
 /** What the agent already knows, in the plain words a rewrite can reuse. */
 function knownFacts(profile: TripProfile): Record<string, string | number> {
   const known: Record<string, string | number> = {};
@@ -92,22 +95,27 @@ function knownFacts(profile: TripProfile): Record<string, string | number> {
 }
 
 async function main(): Promise<void> {
-  const identityFile = agentIdentityPath(env.walletsDir, 'travel-planner');
-  let identity: AgentIdentity;
-  try {
-    identity = JSON.parse(await readFile(identityFile, 'utf8')) as AgentIdentity;
-  } catch {
-    throw new Error(
-      `No agent identity at ${identityFile}. Run the seeder before starting the agent.`,
-    );
+  // helix init's output: the agent's DID and kid (helix-agent.json) and its own key (signing-key.env).
+  const dir = agentDir(env.walletsDir);
+  const summaryRaw = await readFile(join(dir, 'helix-agent.json'), 'utf8').catch(() => null);
+  const keyRaw = await readFile(join(dir, 'signing-key.env'), 'utf8').catch(() => null);
+  if (!summaryRaw || !keyRaw) {
+    throw new Error(`No agent identity in ${dir}. Run the seeder first: pnpm run setup`);
   }
-  const agentDid = identity.agentDid;
-
-  // The admin key is what lets this process ask the API to sign on the agent's
-  // behalf. In OSS there is no per-agent credential narrower than it -- a
-  // known scoping reduction versus self-custody, where only the agent's own
-  // key could ever sign for itself.
-  const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
+  const { did: agentDid, kid } = JSON.parse(summaryRaw) as { did: string; kid: string };
+  const keyEnv = Object.fromEntries(
+    keyRaw.split('\n').filter((line) => line.includes('=') && !line.startsWith('#')).map((line) => [line.slice(0, line.indexOf('=')).trim(), line.slice(line.indexOf('=') + 1).trim()]),
+  );
+  // Self custody: the agent signs its own request proofs; its key never leaves this process.
+  const signer = new kyaos.EnvSigner({ did: agentDid, kid: kid.split('#').pop()!, envVar: 'HELIX_SIGNING_KEY', env: keyEnv });
+  const consents = new ConsentStore(join(env.walletsDir, 'travel-planner-consents.json'));
+  // The SPs' did:web documents are hosted by Helix; a local run serves them on loopback http.
+  const resolveDid = kyaos.verifier.createDidResolver(
+    allowLoopbackHttp ? { rewriteUrl: (url): string => url.replace(/^https:\/\/(localhost|127\.0\.0\.1)([:/])/, 'http://$1$2') } : {},
+  );
+  /** Challenged calls waiting for the user's decision on Helix's page. */
+  const pendingCalls = new Map<string, { options: CallSpToolOptions; prompt: ConsentPrompt; sp: keyof typeof SP_BY_ID }>();
+  const spDids = await resolveSpDids();
   const defaultModels = {
     gemini: 'gemini-2.5-flash',
     openai: 'gpt-4o-mini',
@@ -126,17 +134,13 @@ async function main(): Promise<void> {
 
   const app = express();
   app.use(express.json({ limit: '2mb' }));
-  const sessions = new Map<string, { userDid: string; username: string }>();
+  const sessions = new Map<string, { serviceUser: string; username: string }>();
   const conversationHistory = new Map<string, PlannerMessage[]>();
   /** What the agent has gathered about the trip, per signed-in session. */
   const tripProfiles = new Map<string, TripProfile>();
   const plannerInfo = { provider: planner.provider, model: planner.model };
 
-  // The page only accepts postMessage from these exact origins — the two SP
-  // consent popups — so a stray window cannot inject a forged grant.
-  const spOrigins = Object.values(SP_BY_ID).map((sp) => `http://${env.host}:${sp.port}`);
-
-  app.get('/', (_req, res) => res.type('html').send(agentPageHtml(spOrigins)));
+  app.get('/', (_req, res) => res.type('html').send(agentPageHtml()));
 
   app.get('/api/session', (req, res) => {
     const session = sessions.get(cookies(req.headers.cookie)['agent_session'] ?? '');
@@ -150,10 +154,10 @@ async function main(): Promise<void> {
       return;
     }
     const token = randomUUID();
-    sessions.set(token, { username: AGENT_USERNAME, userDid: DEMO_USER_DID });
+    sessions.set(token, { username: AGENT_USERNAME, serviceUser: DEMO_SERVICE_USER });
     conversationHistory.set(token, []);
     res.setHeader('set-cookie', `agent_session=${token}; HttpOnly; SameSite=Lax; Path=/`);
-    res.json({ authenticated: true, username: AGENT_USERNAME, userDid: DEMO_USER_DID, agentDid: agentDid, planner: plannerInfo });
+    res.json({ authenticated: true, username: AGENT_USERNAME, serviceUser: DEMO_SERVICE_USER, agentDid: agentDid, planner: plannerInfo });
   });
 
   app.post('/api/logout', (req, res) => {
@@ -177,7 +181,7 @@ async function main(): Promise<void> {
   });
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', agentDid: agentDid, userDid: DEMO_USER_DID, llm: plannerInfo });
+    res.json({ status: 'ok', agentDid: agentDid, serviceUser: DEMO_SERVICE_USER, llm: plannerInfo });
   });
 
   /** Appends one exchange to the rolling planner history. */
@@ -359,60 +363,26 @@ async function main(): Promise<void> {
     });
   });
 
-  /**
-   * Every grant the platform currently holds for this agent and this user,
-   * keyed by the service it authorizes. One pass over the agent's active
-   * credentials, rather than one lookup per SP.
-   */
-  async function heldGrantsByService(): Promise<
-    Map<string, { scopes: string[]; durability: string | null }>
-  > {
-    const byService = new Map<string, { scopes: string[]; durability: string | null }>();
-    const summaries = await client.listVCs({ subjectDid: agentDid, status: 'active' });
-    for (const summary of summaries) {
-      const vc = (await client.getVC(summary.vcId)).vc as
-        | { type?: string[]; issuer?: string; credentialSubject?: Record<string, unknown> }
-        | undefined;
-      if (!vc?.type?.includes('DelegationGrantCredential')) continue;
-      const subject = (vc.credentialSubject ?? {}) as {
-        userDid?: string;
-        serviceDid?: string;
-        scopes?: string[];
-        durability?: string;
-      };
-      if (subject.userDid !== DEMO_USER_DID) continue;
-      const serviceDid = subject.serviceDid ?? vc.issuer;
-      if (!serviceDid) continue;
-      byService.set(serviceDid, {
-        scopes: subject.scopes ?? [],
-        durability: subject.durability ?? null,
-      });
-    }
-    return byService;
-  }
-
-  /** Everything the UI needs to render current authorization state. */
+  /** Everything the UI needs to render current authorization state: the root hop the user signed, per SP. */
   app.get('/api/state', async (_req, res) => {
-    try {
-      const held = await heldGrantsByService();
-      const grants = Object.values(SP_BY_ID).map((sp) => {
-        const serviceDid = spDidFor(env.host, sp.port);
-        const grant = held.get(serviceDid);
-        // Surface the actual granted scopes and durability so the UI can show
-        // what the user consented to, not just that they consented.
+    const grants = await Promise.all(
+      Object.values(SP_BY_ID).map(async (sp) => {
+        const serviceDid = spDids[sp.id];
+        const held = await consents.get(serviceDid);
         return {
           sp: sp.id,
           displayName: sp.displayName,
           serviceDid,
-          hasGrant: Boolean(grant),
-          scopes: grant?.scopes ?? [],
-          durability: grant?.durability ?? null,
+          hasGrant: Boolean(held),
+          // What the user consented to, not just that they consented.
+          scopes: ((held?.hop['credentialSubject'] as { allowedAction?: string[] } | undefined)?.allowedAction ?? []),
+          windowUntil: held ? new Date(held.windowUntil * 1000).toISOString() : null,
+          // The user's pairwise did:key at this SP: a different key per SP.
+          userDid: held ? (held.hop['issuer'] as string) : null,
         };
-      });
-      res.json({ agentDid, userDid: DEMO_USER_DID, grants });
-    } catch (error) {
-      res.status(502).json({ error: (error as Error).message });
-    }
+      }),
+    );
+    res.json({ agentDid: agentDid, serviceUser: DEMO_SERVICE_USER, grants });
   });
 
   app.post('/api/call', async (req, res) => {
@@ -420,8 +390,6 @@ async function main(): Promise<void> {
       sp?: 'airline' | 'hotel';
       tool?: string;
       args?: Record<string, unknown>;
-      /** Observability only. The SP still authorizes exclusively from the VP. */
-      authorizationSource?: 'fresh_consent';
     };
     const sp = body.sp ? SP_BY_ID[body.sp] : undefined;
     if (!sp || !body.tool) {
@@ -429,85 +397,85 @@ async function main(): Promise<void> {
       return;
     }
 
-    const serviceDid = spDidFor(env.host, sp.port);
-    // The MCP URL may use a compose-internal hostname, while the consent URL
-    // returned to the browser must remain on localhost.
+    const serviceDid = spDids[sp.id];
+    // The MCP URL may use a compose-internal hostname.
     const baseUrl = sp.id === 'airline' ? env.airlineUrl : env.hotelUrl;
-    const publicBaseUrl = `http://${env.host}:${sp.port}`;
 
-    // One id per user-initiated action, so the SP's presentation /
-    // verification / authorization / invocation events all stitch back to it.
+    // One id per user-initiated action, so the SP's verification / authorization /
+    // invocation events all stitch back to it.
     const correlationId = `act_${randomUUID().slice(0, 12)}`;
+    const options: CallSpToolOptions = {
+      signer,
+      agentDid,
+      consents,
+      serviceUserId: DEMO_SERVICE_USER,
+      spMcpUrl: `${baseUrl}/api/mcp`,
+      serviceDid,
+      toolName: body.tool,
+      correlationId,
+      resolveDid,
+      ...(body.args !== undefined ? { args: body.args } : {}),
+    };
 
     try {
-      const result = await callSpTool({
-        client,
-        agentDid,
-        userDid: DEMO_USER_DID,
-        spMcpUrl: `${baseUrl}/api/mcp`,
-        serviceDid,
-        toolName: body.tool,
-        correlationId,
-        ...(body.args !== undefined ? { args: body.args } : {}),
-        // In the browser flow the agent does not resolve consent itself — it
-        // reports back where the user must go, and the UI drives the handoff.
-        onConsentRequired: async (prompt) => {
-          log(`consent required for ${body.tool} at ${prompt.serviceDid}`);
-          return null;
-        },
-      });
-
-      if (result.ok) {
-        const protectedTool = Boolean(
-          sp.tools.find((tool) => tool.name === body.tool)?.metadata?.requiredScope,
-        );
-        const authorizationSource = protectedTool
-          ? body.authorizationSource === 'fresh_consent'
-            ? 'fresh_consent'
-            : 'standing_grant'
-          : 'not_required';
+      const result = await callSpTool(options);
+      if (result.status === 'consent_required') {
+        // The agent does not resolve consent itself: it reports where the user
+        // must go (the URL the SP signed), and the UI drives the handoff.
+        log(`consent required for ${body.tool} at ${serviceDid}`);
+        const pendingId = randomUUID();
+        pendingCalls.set(pendingId, { options, prompt: result.prompt, sp: sp.id });
+        res.json({ status: 'consent_required', sp: sp.id, serviceDid, consentUrl: result.prompt.authorizationUrl, scopes: result.prompt.scopes, pendingId, correlationId });
+        return;
+      }
+      if (result.status === 'ok') {
+        const protectedTool = Boolean(sp.tools.find((tool) => tool.name === body.tool)?.metadata?.requiredScope);
+        const authorizationSource = protectedTool ? (result.consentReused ? 'standing_grant' : 'fresh_consent') : 'not_required';
         log(`${body.tool} succeeded (authorizationSource=${authorizationSource})`);
         res.json({ status: 'ok', data: result.data, authorizationSource });
         return;
       }
       res.json({ status: 'error', error: result.error });
     } catch (error) {
-      if (error instanceof ConsentDeclinedError) {
-        res.json({
-          status: 'consent_required',
-          sp: sp.id,
-          serviceDid,
-          consentUrl: `${publicBaseUrl}/consent?agentDid=${encodeURIComponent(agentDid)}&userDid=${encodeURIComponent(DEMO_USER_DID)}&correlationId=${encodeURIComponent(correlationId)}`,
-          correlationId,
-        });
+      res.status(500).json({ status: 'error', error: { message: (error as Error).message } });
+    }
+  });
+
+  /**
+   * After the UI opened Helix's consent page: waits for the user's decision,
+   * keeps the root hop the user's did:key signed, and retries the challenged
+   * call with the resume token and that hop.
+   */
+  app.post('/api/consent/complete', async (req, res) => {
+    const { pendingId } = req.body as { pendingId?: string };
+    const pending = pendingId ? pendingCalls.get(pendingId) : undefined;
+    if (!pending) {
+      res.status(404).json({ status: 'error', error: { message: 'no call is waiting for consent' } });
+      return;
+    }
+    pendingCalls.delete(pendingId!);
+    try {
+      const result = await completeConsent(pending.options, pending.prompt);
+      if (result.status === 'ok') {
+        log(`${pending.options.toolName} succeeded after consent (authorizationSource=fresh_consent)`);
+        res.json({ status: 'ok', data: result.data, authorizationSource: 'fresh_consent' });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      if (error instanceof ConsentFlowError && error.reason === kyaos.consent.ConsentReasons.NOT_APPROVED) {
+        log(`consent declined for ${pending.options.toolName} at ${pending.options.serviceDid}`);
+        res.json({ status: 'declined' });
         return;
       }
       res.status(500).json({ status: 'error', error: { message: (error as Error).message } });
     }
   });
 
-  /**
-   * Receives a grant the SP's consent page issued.
-   *
-   * There is nothing to store: the platform recorded this grant when the SP
-   * finalized it, and /api/call reads it back from there. The route stays
-   * because the browser flow posts here, and because acknowledging it is what
-   * tells the UI it may retry the call.
-   */
-  app.post('/api/grants', (req, res) => {
-    const body = req.body as { grantVC?: SignedVC };
-    if (!body.grantVC) {
-      res.status(400).json({ error: 'grantVC is required' });
-      return;
-    }
-    log(`grant ${body.grantVC.id} from ${body.grantVC.issuer} acknowledged (held by platform)`);
-    res.status(201).json({ stored: true });
-  });
-
   app.listen(env.agentPort, '0.0.0.0', () => {
     log(`Travel Planner Agent listening on :${env.agentPort}`);
     log(`agent DID ${agentDid}`);
-    log(`acting for ${DEMO_USER_DID}`);
+    log(`acting for the SPs' user ${DEMO_SERVICE_USER}`);
   });
 }
 

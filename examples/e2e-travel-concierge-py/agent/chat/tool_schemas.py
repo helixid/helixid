@@ -1,9 +1,9 @@
 # The tools the LLM is allowed to call, Python port of
 # ../e2e-travel-concierge/agent/chat/toolSchemas.ts. These are the
 # *agent-facing* schemas (what the model sees): plain business arguments, no
-# VP. The HelixID presentation is attached one layer down
-# (tools/protected_call.py) and enforced one layer down again by the MCP
-# server. The model never sees a VP.
+# proof. The request proof and the delegation chain are attached one layer
+# down (tools/protected_call.py) and enforced one layer down again by the MCP
+# server. The model never sees them.
 
 from __future__ import annotations
 

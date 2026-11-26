@@ -1,42 +1,55 @@
-# The single choke point where a verifiable presentation is created, Python
-# port of ../../e2e-travel-concierge/agent/tools/protectedCall.ts. It loads
-# the *selected persona's* wallet, picks either its default credential or the
-# delegated credential selected by Use case 4, and signs a fresh VP bound to
-# the MCP server. The private key is decrypted in-process and never
-# transmitted.
+# The single choke point where a tool call is signed, Python port of
+# ../../e2e-travel-concierge/agent/tools/protectedCall.ts (KYA-OS stories C-C,
+# F-2). The selected persona signs a request proof with its own key (self
+# custody, locally) naming the service as audience, and carries the chain it
+# holds there. The MCP server verifies both in-process.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
-from agent.mcp_client import call_mcp_tool
-from config import USER_DID, TARGET_SERVICE, env
-from helix_sdk.client import HelixClient
+from agent.mcp_client import send_mcp_call
+from helix_sdk.request_proof import with_request_proof
+from personas.keys import publish_own_status_list, signer_of
+from personas.store import get_persona
 from personas.types import Persona
+from service.identity import load_service
 
 
 @dataclass
 class ProtectedResult:
     success: bool
     detail: str
+    code: Optional[str] = None
+    data: Any = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"success": self.success, "detail": self.detail}
+        if self.code is not None:
+            d["code"] = self.code
+        if self.data is not None:
+            d["data"] = self.data
+        return d
 
 
 def call_protected_tool(persona: Persona, tool_name: str, input: Dict[str, Any]) -> ProtectedResult:
-    client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
-
-    # With no active_credential_id the server picks the persona's single
-    # active credential itself; once delegation has given it a second one,
-    # the choice has to be explicit.
-    vp = client.sign_vp(
-        persona.agent_did,
-        TARGET_SERVICE,
-        user_did=USER_DID,
-        vc_id=persona.active_credential_id,
+    service = load_service()
+    # A hop a self-custody agent delegated is read against that agent's own list, which it keeps signed.
+    delegator = get_persona(persona.delegated_from_persona_id) if persona.delegated_from_persona_id else None
+    for hop in (persona.chain or [])[1:]:
+        if delegator is not None and delegator.agent_did == hop.get("issuer"):
+            publish_own_status_list(delegator)
+    call = with_request_proof(
+        {"method": "tools/call", "params": {"name": tool_name, "arguments": input}},
+        signer_of(persona),
+        audience=service.did,
+        chain=persona.chain or None,
     )
-
-    result = call_mcp_tool(tool_name, {**input, "_helixVP": vp})
-    # Surface the real result (success or the real rejection reason) so the
-    # model can report it truthfully -- the agent never writes the outcome
-    # itself.
-    return ProtectedResult(success=not result.is_error, detail=result.text)
+    result = send_mcp_call(call)
+    # Surface the real result (success or the real refusal) so the model reports
+    # it truthfully -- the agent never writes the outcome itself.
+    if result.is_error:
+        return ProtectedResult(success=False, detail=result.text, code=(result.structured or {}).get("code") or "REFUSED")
+    return ProtectedResult(success=True, detail=result.text, data=result.structured)

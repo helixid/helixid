@@ -147,7 +147,7 @@ describe('track resolution', () => {
     // bare date answering the return question.
     let track: ConversationTrack = 'return';
     let profile: TripProfile = { destination: 'BOM' };
-    let asked: string[] = [];
+    const asked: string[] = [];
 
     for (const reply of ['Thiruvananthapuram', '2026-08-09']) {
       track = resolveTrack({ message: reply, answering: true, track });

@@ -1,187 +1,125 @@
-import { dirname, join } from 'node:path';
-import { gunzipSync } from 'node:zlib';
-import { fileURLToPath } from 'node:url';
-import { config as loadEnv } from 'dotenv';
-import { generateKeyPair, publicKeyToMultibase, signData } from '@helixid/sdk-js';
+// Copyright 2026 DgVerse LLP
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Revocation against renewal of an agent's identity credential, the one its
+// card stands on (KYA-OS stories F-1 and L3-C):
+//
+//   1. setup: a service, a self-custody agent (`helix init`), its root hop,
+//      and one accepted call;
+//   2. revoke the identity credential (POST /v1/vcs/:id/revoke): helixid
+//      flips its bit on the issuer's status list, with the agent's capability
+//      attestations; the status reads `revoked`, and the next call is refused
+//      `status_revoked` by the service, which reads the list live;
+//   3. revocation is final: renewing the revoked credential is refused;
+//   4. a replacement agent is enrolled and rooted, and its calls pass; the old
+//      agent stays revoked;
+//   5. the replacement's identity credential is renewed before it expires
+//      (POST /v1/vcs/:id/renew): a new credential replaces the old one, and
+//      its calls still pass.
+//
+// The service verifies through POST /v1/verify with live status reads and
+// accepts only L3 (see request-proof.ts; self-verify.ts runs the same
+// verifier in-process).
+//
+// Run: HELIX_ADMIN_API_KEY=... pnpm example:revocation-check
+// (HELIX_API_URL defaults to http://localhost:3000.)
 
-// Expiry is planned and known in advance. Revocation is immediate and event
-// driven: consent changes, key compromise, incorrect scopes, or anomalous agent
-// behavior may require stopping a credential before it naturally expires.
+import {
+  acceptable,
+  call,
+  createSelfCustodyAgent,
+  createService,
+  fail,
+  finish,
+  requireAdminKey,
+  rootHop,
+  runSuffix,
+  show,
+  signCall,
+  type Agent,
+  type Hop,
+  type Verdict,
+} from './kyaos-example-utils.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-loadEnv({ path: join(__dirname, '..', '.env') });
+const SCOPE = 'read:catalog';
 
-const DEFAULT_SCOPES = ['read:catalog', 'write:orders', 'read:inventory'];
-const helixApiUrl = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const adminKey = process.env.HELIX_ADMIN_API_KEY;
-
-function readStatusListBit(encodedList: string, index: number): 0 | 1 {
-  const compressed = Buffer.from(encodedList.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
-  const buffer = gunzipSync(compressed);
-  const byteIndex = Math.floor(index / 8);
-  const bitIndex = index % 8;
-  const byte = buffer[byteIndex];
-  if (byte === undefined) throw new Error('Status list index out of bounds');
-  return ((byte >> (7 - bitIndex)) & 1) === 1 ? 1 : 0;
+interface VcSummary {
+  vcId: string;
+  vcType: string;
+  status: string;
 }
 
-type SignedVC = {
-  id: string;
-  validFrom: string;
-  validUntil: string;
-  credentialStatus: {
-    statusListIndex: string;
-    statusListCredential: string;
-  };
-  credentialSubject: {
-    id: string;
-    privilegeScopes: string[];
-    agentName: string;
-  };
-};
-
-async function checkStatus(vc: SignedVC): Promise<{ bit: 0 | 1; status: 'ACTIVE' | 'REVOKED' }> {
-  const response = await fetch(vc.credentialStatus.statusListCredential);
-  if (!response.ok) throw new Error(`StatusList fetch failed with HTTP ${response.status}`);
-  const statusList = (await response.json()) as { credentialSubject: { encodedList: string } };
-  const bit = readStatusListBit(
-    statusList.credentialSubject.encodedList,
-    Number(vc.credentialStatus.statusListIndex),
-  );
-  return { bit, status: bit === 0 ? 'ACTIVE' : 'REVOKED' };
+/** The agent's active identity credential: what its card's revocation entry points at. */
+async function identityOf(agentDid: string): Promise<VcSummary> {
+  const vcs = await call<VcSummary[]>('GET', `/v1/vcs?subjectDid=${encodeURIComponent(agentDid)}&status=active`);
+  const identity = vcs.find((vc) => vc.vcType === 'AgentIdentityCredential');
+  if (!identity) throw new Error(`No active identity credential for ${agentDid}`);
+  return identity;
 }
 
-async function revoke(vcId: string): Promise<void> {
-  if (!adminKey) throw new Error('HELIX_ADMIN_API_KEY is required to revoke a credential.');
-  const response = await fetch(`${helixApiUrl}/v1/vcs/${encodeURIComponent(vcId)}/revoke`, {
-    method: 'POST',
-    headers: { 'x-admin-api-key': adminKey },
-  });
-  if (!response.ok && response.status !== 409) {
-    throw new Error(`Revocation failed with HTTP ${response.status}: ${await response.text()}`);
-  }
-}
-
-async function createEnrollmentToken(scopes: string[]): Promise<string> {
-  const response = await fetch(`${helixApiUrl}/v1/enrollment-tokens`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      agentName: 'E2E Travel Concierge Renewed',
-      requestedScopes: scopes,
-      requestedDomains: ['https://travel-concierge.example.com'],
-      maxDelegationDepth: 0,
-    }),
-  });
-  if (!response.ok)
-    throw new Error(
-      `Enrollment token failed with HTTP ${response.status}: ${await response.text()}`,
-    );
-  const body = (await response.json()) as { token: string };
-  return body.token;
-}
-
-function bootstrapProofPayload(input: {
-  bootstrapToken: string;
-  agentDid: string;
-  timestamp: number;
-}): string {
-  return JSON.stringify({
-    bootstrapToken: input.bootstrapToken,
-    agentDid: input.agentDid,
-    timestamp: input.timestamp,
-  });
-}
-
-async function enrollNewCredential(scopes: string[]): Promise<{ vc: SignedVC; did: string }> {
-  const bootstrapToken = await createEnrollmentToken(scopes);
-  const keyPair = generateKeyPair();
-  const agentDid = `did:key:${publicKeyToMultibase(keyPair.publicKey)}`;
-  const timestamp = Date.now();
-  const proofSignature = signData(
-    bootstrapProofPayload({ bootstrapToken, agentDid, timestamp }),
-    keyPair.privateKey,
-  );
-
-  const response = await fetch(`${helixApiUrl}/v1/enroll`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ bootstrapToken, agentDid, timestamp, proofSignature }),
-  });
-  if (!response.ok) {
-    throw new Error(`Enroll failed with HTTP ${response.status}: ${await response.text()}`);
-  }
-
-  const result = (await response.json()) as { vc: SignedVC };
-  return { did: agentDid, vc: result.vc };
-}
+const statusOf = async (vcId: string): Promise<string> => (await call<{ status: string }>('GET', `/v1/vcs/${encodeURIComponent(vcId)}/status`, undefined, false)).status;
 
 async function main(): Promise<void> {
-  console.log('[Agent Owner] Creating fresh enrollment token and onboarding a test credential.');
-  const initial = await enrollNewCredential(DEFAULT_SCOPES);
-  const vc = initial.vc;
+  requireAdminKey();
+  const suffix = runSuffix();
 
-  console.log('[Verifier] Scenario 1 - Active credential');
-  // BitstringStatusList is a compressed bitstring. The VC carries a URL and index;
-  // the verifier fetches the URL and checks one bit. The list reveals positions,
-  // not credential IDs, which is more private than a plain revocation list.
-  const before = await checkStatus(vc);
-  console.log(`[Verifier] Credential status: ${before.status}`);
-  console.log(`[Verifier] Credential ID: ${vc.id}`);
-  console.log(`[Verifier] StatusList index checked: ${vc.credentialStatus.statusListIndex}`);
-  console.log(`[Verifier] Bit value: ${before.bit} (${before.status.toLowerCase()})`);
-  console.log(`[Verifier] Credential issued at: ${vc.validFrom}`);
-  console.log(`[Verifier] Credential expires at: ${vc.validUntil}`);
+  console.log('[1] setup: a service, a self-custody agent, its root hop...');
+  const service = await createService(`catalog-${suffix}`, [SCOPE]);
+  const agent = await createSelfCustodyAgent(`catalog-agent-${suffix}`, [SCOPE]);
+  const chain: Hop[] = [await rootHop(agent.did, service.did, [SCOPE])];
+  const callAs = async (who: Agent, whoseChain: Hop[]): Promise<Verdict> => {
+    const signed = await signCall(who.signer, service.did, whoseChain);
+    return call<Verdict>('POST', '/v1/verify', { proof: signed.proof, request: signed.request, chain: whoseChain, expectedAudience: service.did, action: SCOPE, liveStatus: true }, false);
+  };
+  const before = await callAs(agent, chain);
+  show('a call', before);
 
-  console.log('\n[Verifier] Scenario 2 - Revoke and re-check');
-  // In production this is the agent owner's action, not the verifier's. Revoke
-  // immediately when consent is withdrawn, a private key is compromised, scopes
-  // were issued incorrectly, or agent behavior is anomalous.
-  console.log(`[Agent Owner] Revoking credential: ${vc.id}`);
-  await revoke(vc.id);
-  const after = await checkStatus(vc);
-  console.log('[Helix ID] Credential revoked. StatusList bit set to 1.');
-  console.log(`[Verifier] Credential status: ${after.status}`);
-  console.log(`[Verifier] Bit value: ${after.bit} (${after.status.toLowerCase()})`);
-  console.log("[Verifier] External response to agent: { error: 'VP_VERIFICATION_FAILED' }");
-  // Revocation is immediate for Path 1 API verification and Path 3 self-verify.
-  // Session JWT verifiers may not see revocation until a pre-existing JWT expires
-  // (up to the configured 10-minute TTL in the default setup).
+  console.log('[2] revoking its identity credential...');
+  const identity = await identityOf(agent.did);
+  await call('POST', `/v1/vcs/${encodeURIComponent(identity.vcId)}/revoke`, {});
+  const status = await statusOf(identity.vcId);
+  console.log(`    status of ${identity.vcId}: ${status}`);
+  const afterRevoke = await callAs(agent, chain);
+  show('a call after the revocation', afterRevoke);
 
-  console.log('\n[Verifier] Scenario 3 - Repeated VP verification after revocation');
-  // This script is VP-only (no JWT session bridge): each presentation checks
-  // revocation status, so a revoked credential is denied immediately every time.
-  for (const presentation of [1, 2, 3, 4]) {
-    const check = await checkStatus(vc);
-    const decision = check.bit === 1 ? 'DENIED' : 'GRANTED';
-    console.log(`[Verifier] VP Presentation ${presentation}: checking... ${decision}`);
-    console.log(`           Internal reason: StatusList bit = ${check.bit} (${check.status})`);
-    if (check.bit === 1) {
-      console.log("           External response to agent: { error: 'VP_VERIFICATION_FAILED' }");
-    }
+  console.log('[3] renewing the revoked credential...');
+  let renewalRefused = false;
+  try {
+    await call('POST', `/v1/vcs/${encodeURIComponent(identity.vcId)}/renew`, {});
+    console.log('    renewed (unexpected)');
+  } catch (error) {
+    renewalRefused = true;
+    console.log(`    refused: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  console.log('\n[Verifier] Scenario 4 - Renewal after revocation');
-  // The DID is not the credential. Revoking a credential does not erase the
-  // agent identity. Current onboarding issues a new credential to a new
-  // DID; the old VC remains revoked and the new VC receives a fresh list index.
-  console.log('[Agent Owner] Creating replacement enrollment token.');
-  const renewed = await enrollNewCredential(vc.credentialSubject.privilegeScopes);
-  const oldStatus = await checkStatus(vc);
-  const newStatus = await checkStatus(renewed.vc);
-  console.log(
-    `[Verifier] Old VC (${vc.id}): StatusList index ${vc.credentialStatus.statusListIndex} bit = ${oldStatus.bit} ${oldStatus.status}`,
+  console.log('[4] enrolling a replacement agent...');
+  const replacement = await createSelfCustodyAgent(`catalog-agent-${suffix}-2`, [SCOPE]);
+  const replacementChain: Hop[] = [await rootHop(replacement.did, service.did, [SCOPE])];
+  const replaced = await callAs(replacement, replacementChain);
+  show('the replacement agent', replaced);
+  const oldAgain = await callAs(agent, chain);
+  show('the revoked agent, again', oldAgain);
+
+  console.log("[5] renewing the replacement's identity credential before it expires...");
+  const original = await identityOf(replacement.did);
+  const renewed = await call<{ vcId: string; previousVcId: string }>('POST', `/v1/vcs/${encodeURIComponent(original.vcId)}/renew`, {});
+  console.log(`    ${renewed.previousVcId} -> ${renewed.vcId}`);
+  const afterRenew = await callAs(replacement, replacementChain);
+  show('the replacement agent after the renewal', afterRenew);
+
+  finish(
+    acceptable(before) &&
+      status === 'revoked' &&
+      !acceptable(afterRevoke) && (afterRevoke.reasons ?? []).includes('status_revoked') &&
+      renewalRefused &&
+      acceptable(replaced) &&
+      !acceptable(oldAgain) &&
+      acceptable(afterRenew),
+    'seven',
   );
-  console.log(
-    `[Verifier] New VC (${renewed.vc.id}): StatusList index ${renewed.vc.credentialStatus.statusListIndex} bit = ${newStatus.bit} ${newStatus.status}`,
-  );
-  console.log(`[Verifier] Original agent DID: ${initial.did}`);
-  console.log(`[Verifier] Replacement agent DID: ${renewed.did}`);
-  console.log('[Verifier] The old VC remains permanently revoked; the replacement VC is active.');
-  console.log('[Verifier] BitstringStatusList: https://www.w3.org/TR/vc-bitstring-status-list/');
 }
 
-main().catch((error: unknown) => {
-  console.error(`[Revocation Check] ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+main().catch(fail('revocation-check'));

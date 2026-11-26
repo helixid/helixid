@@ -8,6 +8,7 @@ import {
   startLiveApi,
   type LiveApi,
 } from '../utils/liveApi.js';
+import { defaultKidFragment } from '@helixid/core';
 
 describe('Onboarding Live Integration', () => {
   let api: LiveApi;
@@ -21,66 +22,74 @@ describe('Onboarding Live Integration', () => {
     await api?.stop();
   });
 
-  it('onboards an agent through the SDK and persists DID, VC, and audit state', async () => {
+  it('onboards an agent server-side in one call and persists DID, VC, key, and audit state — no wallet', async () => {
     const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
-    const http = supertest(api.baseUrl);
-    const agent = await onboardLiveAgent(api, client, {
+    const agent = await onboardLiveAgent(api, {
       agentName: 'Live Onboarding Agent',
       requestedScopes: ['read:orders', 'write:orders'],
       requestedDomains: ['https://live-onboarding.agent.example.com'],
     });
 
-    try {
-      // Agent DIDs are minted per the server's configured DID_METHOD (see
-      // DIDService.createDID) — did:hedera in production, but did:key/did:web
-      // work equally well and need no Hedera network at all, so this only
-      // pins the shape, not a specific method.
-      expect(agent.did).toMatch(/^did:(hedera:testnet:[a-zA-Z0-9._-]+|key:z\w+|web:[\w.:%-]+)$/);
-      expect(agent.vcId).toMatch(/^vc:helix:/);
+    // Agent DIDs are minted per the server's configured DID_METHOD (see
+    // DIDService.createDID) — did:hedera in production, but did:key/did:web
+    // work equally well and need no Hedera network at all, so this only
+    // pins the shape, not a specific method.
+    expect(agent.did).toMatch(/^did:(hedera:testnet:[a-zA-Z0-9._-]+|key:z\w+|web:[\w.:%-]+)$/);
+    // F-1: the onboarding VC is the agent's identity credential, id urn:uuid:<v4>.
+    expect(agent.vcId).toMatch(/^urn:uuid:/);
 
-      const didRes = await http.get(`/v1/dids/${agent.did}`);
-      expect(didRes.statusCode).toBe(200);
-      expect(didRes.body.id).toBe(agent.did);
-      expect(didRes.body.service[0].serviceEndpoint).toBe('https://live-onboarding.agent.example.com');
+    const didRes = await supertest(api.baseUrl).get(`/v1/dids/${encodeURIComponent(agent.did)}`);
+    expect(didRes.statusCode).toBe(200);
+    expect(didRes.body.id).toBe(agent.did);
+    expect(didRes.body.service[0].serviceEndpoint).toBe('https://live-onboarding.agent.example.com');
 
-      // Storage-agnostic: goes through the public API rather than a raw
-      // Prisma/Postgres query, so this passes under any configured storage
-      // adapter (sqlite in this sandbox, Postgres elsewhere).
-      const vcRecord = await client.getVC(agent.vcId);
-      expect((vcRecord.vc as Record<string, unknown>)['issuer']).toBe(api.issuerDid);
-      expect(vcRecord.status).toBe('active');
-      expect((vcRecord.vc as { credentialSubject: { id: string; type: string } })['credentialSubject']).toMatchObject({
-        id: agent.did,
-        type: 'HelixAgent',
-      });
-      expect((vcRecord.vc as { proof: { verificationMethod: string } })['proof'].verificationMethod).toBe(
-        `${api.issuerDid}#key-1`,
-      );
+    // Storage-agnostic: goes through the public API rather than a raw
+    // Prisma/Postgres query, so this passes under any configured storage
+    // adapter (sqlite in this sandbox, Postgres elsewhere).
+    const vcRecord = await client.getVC(agent.vcId);
+    const identity = vcRecord.vc as Record<string, unknown>;
+    expect(identity['issuer']).toBe(api.issuerDid);
+    expect(vcRecord.status).toBe('active');
+    expect(identity['type']).toEqual(expect.arrayContaining(['VerifiableCredential', 'AgentIdentityCredential']));
+    expect(identity['credentialSubject']).toMatchObject({
+      id: agent.did,
+      name: 'Live Onboarding Agent',
+      responsibleParty: api.issuerDid,
+    });
+    expect((identity['proof'] as { type: string; cryptosuite: string; verificationMethod: string })).toMatchObject({
+      type: 'DataIntegrityProof',
+      cryptosuite: 'eddsa-jcs-2022',
+      // A did:key issuer signs as its W3C method id (defaultKidFragment).
+      verificationMethod: `${api.issuerDid}#${defaultKidFragment(String(api.issuerDid))}`,
+    });
 
-      // Server custody: onboarding returns a DID and a VC id and nothing
-      // else. There is no wallet file, and no key material crosses the API
-      // boundary at all — the whole response is those two identifiers.
-      expect(Object.keys(agent).sort()).toEqual(['cleanup', 'did', 'vcId']);
-      expect(JSON.stringify(vcRecord)).not.toContain('privateKey');
+    // One capability attestation per requested scope, kept by Helix next to the identity.
+    const credentialsRes = await supertest(api.baseUrl)
+      .get(`/v1/agents/${encodeURIComponent(agent.did)}/credentials`)
+      .set('x-admin-api-key', api.adminApiKey);
+    expect(credentialsRes.statusCode).toBe(200);
+    expect(credentialsRes.body.identity.vcId).toBe(agent.vcId);
+    const attested = (credentialsRes.body.attestations as Array<{ status: string; credential: { credentialSubject: { capability: string } } }>)
+      .map((entry) => [entry.credential.credentialSubject.capability, entry.status])
+      .sort();
+    expect(attested).toEqual([['read:orders', 'active'], ['write:orders', 'active']]);
 
-      // The credential is findable for this subject, which is what the agent
-      // used to prove by holding it in a wallet.
-      const listed = await client.listVCs({ subjectDid: agent.did, status: 'active' });
-      expect(listed.map((entry) => entry.vcId)).toContain(agent.vcId);
+    // No wallet file, no client-held key — the server generated and holds
+    // the agent's private key itself (AgentKey table); nothing in the
+    // onboarding exchange carried a private key.
 
-      const auditLog = await client.getAuditLog({ limit: 100 });
-      const auditTypes = auditLog.map((entry) => entry.eventType);
-      expect(auditTypes).toEqual(expect.arrayContaining([
-        'ENROLLMENT_TOKEN_GENERATED',
-        'ENROLLMENT_TOKEN_CONSUMED',
-        'CHALLENGE_ISSUED',
-        'CHALLENGE_VERIFIED',
-        'DID_CREATED',
-        'VC_ISSUED',
-        'AGENT_ONBOARDED',
-      ]));
-    } finally {
-      await agent.cleanup();
-    }
+    // GET /v1/audit-log returns one page, `{ items, nextCursor }`, each item a
+    // `{id, recordedAt, eventDigest, event, ...receipt}` row whose `event` is a
+    // typed producer event (stories A-1, A-2).
+    const auditLog = (await client.getAuditLog({ limit: 100 })) as unknown as {
+      items: Array<{ event: { eventType: string } }>;
+    };
+    const auditTypes = auditLog.items.map((entry) => entry.event.eventType);
+    expect(auditTypes).toEqual(expect.arrayContaining([
+      'credential.required',   // enrollment token generated, onboarding challenge issued
+      'credential.verified',   // token consumed, challenge verified, agent onboarded
+      'configuration.changed', // DID created
+      'delegation.issued',     // identity credential and capability attestations issued
+    ]));
   }, LIVE_HEDERA_TIMEOUT_MS);
 });

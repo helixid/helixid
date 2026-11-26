@@ -1,6 +1,6 @@
 # search_flights -- requires read:catalog. In the delegation demo, Research
-# only gets this through the delegated child credential, not its base
-# credential. Python port of ../../.../searchFlights.ts.
+# only gets it through the hop Planner delegated: it has no authority of its
+# own. Python port of ../../.../searchFlights.ts.
 
 from __future__ import annotations
 
