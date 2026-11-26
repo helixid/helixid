@@ -174,7 +174,12 @@ function extractBudget(text: string): number | undefined {
   if (/\b(luxury|premium|best available)\b/.test(lower)) return 12000;
   if (/\b(mid|moderate|standard|mid-range)\b/.test(lower)) return 8000;
   if (/\b(budget|cheap|economical|affordable)\b/.test(lower)) return 5500;
-  const amount = lower.match(/(?:₹|rs\.?|inr)?\s*(\d[\d,]{2,})\s*(?:per night|a night|\/night|nightly)?/);
+  // The currency marker is required, not optional: an optional prefix here
+  // used to match *any* bare 3+ digit run in the message, including the
+  // year in an already-answered ISO travel date (e.g. "2026-10-15" reads as
+  // "₹2026/night"), silently hijacking hotelBudget before the budget
+  // question was ever asked.
+  const amount = lower.match(/(?:₹|rs\.?|inr)\s*(\d[\d,]{2,})\s*(?:per night|a night|\/night|nightly)?/);
   if (amount?.[1]) {
     const value = Number(amount[1].replace(/,/g, ''));
     if (value >= 1000) return value;

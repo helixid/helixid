@@ -3,9 +3,9 @@
 # so compose overrides the command per service.
 #
 # Build context: this repo's root (see docker-compose.yml's `context: ../..`).
-# Nothing outside this repo is needed -- @helixid/sdk-js and @helixid/widget
-# are both published npm packages, so a plain `pnpm install` resolves them
-# from the registry with no sibling checkout and no credentials.
+# Nothing outside this repo is needed -- @helixid/sdk-js and
+# @helixid/mcp-middleware are published npm packages, so a plain `pnpm install`
+# resolves them from the registry (their KYA-OS releases: see README.md).
 #
 #   docker build -f examples/e2e-consent-demo/docker/node.Dockerfile -t helixid-consent-node .
 FROM node:24.15.0-alpine
@@ -29,8 +29,9 @@ RUN corepack install
 
 COPY examples/e2e-consent-demo examples/e2e-consent-demo
 
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --no-frozen-lockfile --filter @helixid/example-e2e-consent-demo
-
 WORKDIR /repo/examples/e2e-consent-demo
+# Installed on its own: the demo pins the KYA-OS releases, and stays out of the
+# root workspace (pnpm-workspace.yaml) until they are published.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --ignore-workspace --no-frozen-lockfile
 CMD ["pnpm", "run", "agent"]

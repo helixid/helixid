@@ -28,10 +28,6 @@ module.exports = {
   },
   overrides: [
     {
-      files: ['*.ts', 'e2e/**/*.ts'],
-      parserOptions: { project: ['./tsconfig.json'] },
-    },
-    {
       files: ['**/tests/**/*.ts', '**/*.test.ts', 'vitest.config.ts'],
       rules: {
         '@typescript-eslint/no-explicit-any': 'off',

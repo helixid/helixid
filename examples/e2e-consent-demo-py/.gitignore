@@ -1,0 +1,4 @@
+# Local identities: the SPs' and the agent's own keys, and the agent's consent hops.
+.data/
+.env
+__pycache__/

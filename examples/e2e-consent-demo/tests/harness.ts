@@ -1,185 +1,133 @@
-// Shared two-SP harness for the cross-epic suite.
-//
-// Boots real SP servers on real ports with real did:web identities, so every
-// assertion below runs against the shipped code paths — real DID resolution,
-// real signing, real verifyVP, real status-list fetches.
+// The two-SP harness: a real helix-api (in process, SQLite, did:web so it can
+// host the SPs' and the agent's DID documents), both SP servers on real
+// ports, and a self-custody agent, so every assertion runs the shipped code
+// paths end to end: Helix's consent page, the user's did:key, request proofs,
+// local verification and response proofs. No LLM.
 
 import type { Server } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HelixClient, type SignedVC } from '@helixid/sdk-js';
-import {
-  AGENT_PRIVILEGE_SCOPES,
-  AIRLINE,
-  HOTEL,
-  type SpDefinition,
-} from '../helixid-config/index.js';
+import { helixInit, kyaos } from '@helixid/sdk-js';
+import { AGENT_PRIVILEGE_SCOPES, AIRLINE, DEMO_SERVICE_USER, HOTEL, type SpDefinition } from '../helixid-config/index.js';
 import { createSpApp, type SpApp } from '../sp-shared/app.js';
-import { provisionSpIdentity, statePath } from '../sp-shared/identity.js';
-import { SpStore } from '../sp-shared/store.js';
-import { onboardLiveAgent, startLiveApi } from '../../../tests/utils/liveApi.js';
+import { createAuditEmitter } from '../sp-shared/audit.js';
+import { enrollSpService } from '../sp-shared/identity.js';
+import { createGate } from '../sp-shared/kyaos-gate.js';
+import { ConsentStore } from '../agent/consentStore.js';
+import type { CallSpToolOptions } from '../agent/consentAwareCall.js';
+import { startLiveApi } from '../../../tests/utils/liveApi.js';
 
 export interface RunningSp {
   spApp: SpApp;
   server: Server;
-  store: SpStore;
-  baseUrl: string;
   mcpUrl: string;
   serviceDid: string;
-  stateFile: string;
   definition: SpDefinition;
+  /** The SP's activity log lines (sp-shared/audit.ts), parsed. */
+  audit: Array<Record<string, unknown>>;
 }
 
 export interface Harness {
   workDir: string;
+  helixApiUrl: string;
   airline: RunningSp;
   hotel: RunningSp;
-  /** Signs presentations on the agent's behalf and reads its held grants. */
-  client: HelixClient;
   agentDid: string;
-  /** The live API's configured issuer DID, when it reports one. */
-  platformDid: string | undefined;
-  /** The live helix-api instance backing both SPs' verifyVP/issueGrant calls. */
-  helixApiUrl: string;
-  stop: () => Promise<void>;
+  signer: kyaos.Signer;
+  consents: ConsentStore;
+  /** The options callSpTool/completeConsent take for `sp`, minus the tool. */
+  callOptions(sp: RunningSp, toolName: string, args?: Record<string, unknown>): CallSpToolOptions;
+  /** Plays the user on Helix's consent page: opens it (page cookie, form token) and presses Allow or Decline. */
+  decide(authorizationUrl: string, decision: 'approve' | 'deny'): Promise<void>;
+  stop(): Promise<void>;
 }
 
-async function startSp(
-  workDir: string,
-  definition: SpDefinition,
-  port: number,
-  helixApiUrl: string,
-  host = 'localhost',
-): Promise<RunningSp> {
-  const { identity, statusList } = await provisionSpIdentity({
-    dir: workDir,
-    spId: definition.id,
-    host,
-    port,
-  });
-  const stateFile = statePath(workDir, definition.id);
-  const store = await SpStore.open(stateFile, statusList);
-  const baseUrl = `http://${host}:${port}`;
+const resolveDid = kyaos.verifier.createDidResolver({ rewriteUrl: (url) => url.replace(/^https:\/\/(localhost|127\.0\.0\.1)([:/])/, 'http://$1$2') });
 
+async function startSp(workDir: string, definition: SpDefinition, port: number, helixApiUrl: string, adminApiKey: string): Promise<RunningSp> {
+  const { identity } = await enrollSpService({ dir: workDir, definition, host: '127.0.0.1', port, helixApiUrl, adminApiKey });
+  const gate = await createGate({
+    serviceDid: identity.did,
+    signingKey: identity.signingKey,
+    helixApiUrl,
+    displayName: definition.displayName,
+    catalog: definition.scopeCatalog.map((entry) => entry.scope),
+    windowSeconds: 30 * 24 * 3600,
+    hopLifetimeSeconds: 3600,
+    allowLoopbackHttp: true,
+  });
+  const audit: Array<Record<string, unknown>> = [];
   const spApp = createSpApp({
     definition: { ...definition, port },
-    issuer: {
-      did: identity.did,
-      privateKeyHex: identity.privateKeyHex,
-      publicKeyHex: identity.publicKeyHex,
-    },
-    baseUrl,
-    helixApiUrl,
-    store,
+    issuer: { did: identity.did },
+    gate,
+    audit: createAuditEmitter({ serviceDid: identity.did, serviceName: definition.displayName, write: (line) => audit.push(JSON.parse(line) as Record<string, unknown>) }),
   });
-
   const server = await new Promise<Server>((resolve) => {
-    const listening = spApp.app.listen(port, host, () => resolve(listening));
+    const listening = spApp.app.listen(port, '127.0.0.1', () => resolve(listening));
   });
-
-  return {
-    spApp,
-    server,
-    store,
-    baseUrl,
-    mcpUrl: `${baseUrl}/api/mcp`,
-    serviceDid: identity.did,
-    stateFile,
-    definition,
-  };
+  return { spApp, server, mcpUrl: `http://127.0.0.1:${port}/api/mcp`, serviceDid: identity.did, definition, audit };
 }
 
-/**
- * Every consent grant the platform holds for this agent and user.
- *
- * Replaces the wallet's own credential list: agent self-custody is retired,
- * so grants live on the platform, recorded when the issuing SP finalizes
- * them. listVCs() returns summaries without a credentialSubject, so each
- * active credential is read back in full.
- */
-export async function heldGrants(
-  client: HelixClient,
-  agentDid: string,
-  userDid: string,
-): Promise<SignedVC[]> {
-  const summaries = await client.listVCs({ subjectDid: agentDid, status: 'active' });
-  const grants: SignedVC[] = [];
-  for (const summary of summaries) {
-    const vc = (await client.getVC(summary.vcId)).vc as SignedVC | undefined;
-    if (!vc || !(vc.type as string[]).includes('DelegationGrantCredential')) continue;
-    if ((vc.credentialSubject as unknown as { userDid?: string }).userDid === userDid) {
-      grants.push(vc);
-    }
-  }
-  return grants;
+async function onboardAgent(workDir: string, helixApiUrl: string, adminApiKey: string): Promise<{ did: string; signer: kyaos.Signer }> {
+  const res = await fetch(`${helixApiUrl}/v1/agents`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': adminApiKey },
+    body: JSON.stringify({ name: 'Travel Planner Agent (test)', scopes: AGENT_PRIVILEGE_SCOPES, keyCustody: 'self' }),
+  });
+  const created = (await res.json()) as { enrollmentToken?: string };
+  if (!created.enrollmentToken) throw new Error(`agent creation failed: HTTP ${res.status}`);
+  const outDir = join(workDir, 'agent');
+  const init = await helixInit({ apiUrl: helixApiUrl, enrollmentToken: created.enrollmentToken, outDir });
+  const keyEnv = Object.fromEntries(
+    (await readFile(init.files.signingKey, 'utf8')).split('\n').filter((line) => line.includes('=')).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+  );
+  return { did: init.did, signer: new kyaos.EnvSigner({ did: init.did, kid: init.kid.split('#').pop()!, envVar: init.envVar, env: keyEnv }) };
 }
 
-/** The platform's standing grant for one SP, if any. */
-export async function heldGrant(
-  client: HelixClient,
-  agentDid: string,
-  serviceDid: string,
-  userDid: string,
-): Promise<SignedVC | undefined> {
-  const grants = await heldGrants(client, agentDid, userDid);
-  return grants.find((vc) => {
-    const subject = vc.credentialSubject as unknown as { serviceDid?: string };
-    return (subject.serviceDid ?? vc.issuer) === serviceDid;
-  });
+async function decide(authorizationUrl: string, decision: 'approve' | 'deny'): Promise<void> {
+  const page = await fetch(authorizationUrl);
+  const html = await page.text();
+  if (!page.ok) throw new Error(`consent page: HTTP ${page.status}`);
+  const cookie = page.headers.getSetCookie().map((line) => line.split(';')[0]).join('; ');
+  const field = (name: string): string => (html.match(new RegExp(`name="${name}" value="([^"]*)"`)) ?? [])[1] ?? '';
+  const form = new URLSearchParams({ pageToken: field('pageToken'), ...(decision === 'approve' ? { grantDigest: field('grantDigest') } : {}) });
+  const answer = await fetch(`${authorizationUrl}/${decision}`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie }, body: form.toString() });
+  if (!answer.ok) throw new Error(`consent page refused the ${decision}: HTTP ${answer.status}`);
 }
 
 export async function startHarness(airlinePort: number, hotelPort: number): Promise<Harness> {
-  const workDir = await mkdtemp(join(tmpdir(), 'helix-crossepic-'));
-  // issueGrant() and verifyVP() are API-mediated (docs/proposal-sdk-api-only.md),
-  // so both SPs need a real helix-api to call — a fresh, fully-local (SQLite,
-  // did:key) instance per run, same as the root workspace's own live suite.
+  const workDir = await mkdtemp(join(tmpdir(), 'helix-consent-demo-'));
   const api = await startLiveApi();
-  const airline = await startSp(workDir, AIRLINE, airlinePort, api.baseUrl);
-  const hotel = await startSp(workDir, HOTEL, hotelPort, api.baseUrl);
-  // A real onboarded agent: the API holds its key, so it must know about it.
-  const client = new HelixClient(api.baseUrl, { adminApiKey: api.adminApiKey });
-  const agent = await onboardLiveAgent(api, client, {
-    agentName: 'Travel Planner Agent',
-    requestedScopes: [...AGENT_PRIVILEGE_SCOPES],
-    requestedDomains: ['https://travel-planner.agent.example.com'],
-  });
-
+  const airline = await startSp(workDir, AIRLINE, airlinePort, api.baseUrl, api.adminApiKey);
+  const hotel = await startSp(workDir, HOTEL, hotelPort, api.baseUrl, api.adminApiKey);
+  const agent = await onboardAgent(workDir, api.baseUrl, api.adminApiKey);
+  const consents = new ConsentStore(join(workDir, 'consents.json'));
   return {
     workDir,
+    helixApiUrl: api.baseUrl,
     airline,
     hotel,
-    client,
     agentDid: agent.did,
-    platformDid: api.issuerDid,
-    helixApiUrl: api.baseUrl,
+    signer: agent.signer,
+    consents,
+    callOptions: (sp, toolName, args) => ({
+      signer: agent.signer,
+      agentDid: agent.did,
+      consents,
+      serviceUserId: DEMO_SERVICE_USER,
+      spMcpUrl: sp.mcpUrl,
+      serviceDid: sp.serviceDid,
+      toolName,
+      resolveDid,
+      ...(args ? { args } : {}),
+    }),
+    decide,
     stop: async () => {
-      await new Promise<void>((resolve) => airline.server.close(() => resolve()));
-      await new Promise<void>((resolve) => hotel.server.close(() => resolve()));
-      await rm(workDir, { recursive: true, force: true });
+      await Promise.all([airline, hotel].map((sp) => new Promise<void>((resolve) => sp.server.close(() => resolve()))));
       await api.stop();
+      await rm(workDir, { recursive: true, force: true });
     },
   };
-}
-
-/** Drives the SP's two consent routes exactly as the widget does. */
-export async function grantConsent(
-  sp: RunningSp,
-  agentDid: string,
-  userDid: string,
-  scopeOverride?: string[],
-): Promise<SignedVC> {
-  const catalogRes = await fetch(
-    `${sp.baseUrl}/api/consent/scopes?agentDid=${encodeURIComponent(agentDid)}`,
-  );
-  const { scopeOptions } = (await catalogRes.json()) as { scopeOptions: Array<{ scope: string }> };
-  const scopes = scopeOverride ?? scopeOptions.map((option) => option.scope);
-
-  const acceptRes = await fetch(`${sp.baseUrl}/api/consent/accept`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agentDid, userDid, scopes, durability: 'standing' }),
-  });
-  const body = (await acceptRes.json()) as { grantVC: SignedVC };
-  return body.grantVC;
 }

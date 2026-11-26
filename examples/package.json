@@ -2,6 +2,7 @@
   "name": "@helixid/examples",
   "private": true,
   "dependencies": {
+    "@helixid/mcp-middleware": "^0.1.4",
     "@helixid/sdk-js": "^0.4.0"
   }
 }

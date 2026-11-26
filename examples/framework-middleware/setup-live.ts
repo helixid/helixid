@@ -1,88 +1,60 @@
+// Copyright 2026 DgVerse LLP
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// One-time operator setup, against a running helixid:
+//   1. register the service the agent will call (POST /v1/services);
+//   2. create a self-custody agent (POST /v1/agents, story F-3) and run
+//      `helix init` for it here: its key is generated on this machine and
+//      only the public half reaches helixid;
+//   3. root the agent's authority over the service (POST /v1/grants): one
+//      delegation hop (§6.10), the agent's chain.
+// It records the result in agent/agent.json for langchain.ts and mcp.ts.
+
 import 'dotenv/config';
 import { writeFile } from 'node:fs/promises';
-import {
-  agentIdentityPath,
-  createHelixClient,
-  ensureAgentDirectory,
-  helixApiUrl,
-  loadAgentCredential,
-  logStep,
-  readAgentIdentity,
-  requestedDomains,
-  requestedScopes,
-} from './shared.js';
+import { join } from 'node:path';
+import { helixInit } from '@helixid/sdk-js';
+import { adminApiKey, agentIdentityPath, agentScopes, ensureAgentDirectory, exampleRoot, helixApiUrl, logStep, serviceScopes, type AgentIdentity } from './shared.js';
 
-type EnrollmentTokenResponse = {
-  token: string;
-  expiresAt: string;
-};
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function admin<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${helixApiUrl}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    method,
+    headers: { 'x-admin-api-key': adminApiKey, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const payload = await response.json();
-  if (!response.ok) {
-    throw new Error(`${path} failed with ${response.status}: ${JSON.stringify(payload)}`);
-  }
-  return payload as T;
-}
-
-async function assertApiAvailable(): Promise<void> {
-  const response = await fetch(`${helixApiUrl}/health`);
-  if (!response.ok) {
-    throw new Error(
-      `Helix API health check failed with ${response.status}. Start the API before running setup.`,
-    );
-  }
+  const json = (await response.json().catch(() => ({}))) as T & { error?: { code?: string; message?: string } };
+  if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${json.error?.code ?? ''} ${json.error?.message ?? ''}`.trim());
+  return json;
 }
 
 async function main(): Promise<void> {
+  if (!adminApiKey) throw new Error('Set HELIX_ADMIN_API_KEY to the API admin key.');
   await ensureAgentDirectory();
+  const suffix = Date.now().toString(36);
 
-  if (await readAgentIdentity()) {
-    logStep('Setup', `Found existing agent identity at ${agentIdentityPath}; skipping onboarding.`);
-    const { identity, vc } = await loadAgentCredential();
-    const expiresAt = vc.validUntil ?? vc.expirationDate ?? 'unknown';
+  const service = await admin<{ did: string }>('POST', '/v1/services', { name: `framework-orders-${suffix}`, domain: `orders-${suffix}.example.com`, requiredScopes: serviceScopes });
+  logStep('Setup', `Service ${service.did} (tools need ${serviceScopes.join(', ')}).`);
 
-    logStep('Agent', `DID: ${identity.agentDid}`);
-    logStep('Agent', `Selected VC id: ${identity.vcId}`);
-    logStep('Agent', `Credential expiry: ${expiresAt}`);
-    return;
-  }
+  const created = await admin<{ did: string; enrollmentToken: string }>('POST', '/v1/agents', { name: `framework-agent-${suffix}`, scopes: agentScopes, keyCustody: 'self', didHosting: 'helix' });
+  const init = await helixInit({ apiUrl: helixApiUrl, enrollmentToken: created.enrollmentToken, outDir: join(exampleRoot, 'agent') });
+  logStep('Setup', `Agent ${init.did} enrolled by helix init; its key is in ${init.files.signingKey} and was never sent.`);
 
-  await assertApiAvailable();
+  const card = (await (await fetch(`${helixApiUrl}/${init.did.split(':').slice(3).map(decodeURIComponent).join('/')}/card.json`)).json()) as { responsibleParty?: string };
+  const root = await admin<{ hop: { id: string } }>('POST', '/v1/grants', { issuer: card.responsibleParty, invoker: init.did, invocationTarget: service.did, allowedAction: agentScopes });
+  logStep('Setup', `Root hop ${root.hop.id}: ${agentScopes.join(', ')} at the service.`);
 
-  logStep('Setup', `Using Helix API at ${helixApiUrl}`);
-  logStep('Agent Owner', 'Creating a one-use enrollment token through the live API.');
-  const enrollment = await postJson<EnrollmentTokenResponse>('/v1/enrollment-tokens', {
-    agentName: 'Framework Middleware Demo Agent',
-    requestedScopes,
-    requestedDomains,
-    maxDelegationDepth: 0,
-  });
-  logStep('Agent Owner', `Enrollment token expires at ${enrollment.expiresAt}.`);
-
-  const client = createHelixClient();
-
-  // POST /v1/onboard. The server generates the agent's keypair and holds the
-  // private key encrypted: no local wallet, no passphrase, and no key material
-  // in the response — only the DID and the issued credential's id.
-  logStep('Agent', 'Onboarding with Helix API using the enrollment token (POST /v1/onboard).');
-  const identity = await client.onboardAgent(enrollment.token, requestedDomains);
-  await writeFile(agentIdentityPath, JSON.stringify(identity, null, 2), 'utf8');
-
-  const { vc } = await loadAgentCredential();
-  const expiresAt = vc.validUntil ?? vc.expirationDate ?? 'unknown';
-
-  logStep('Helix ID', `Issued VC ${identity.vcId} for ${identity.agentDid}.`);
-  logStep('Agent', `Agent identity saved to ${agentIdentityPath} (no key material).`);
-  logStep('Agent', `DID: ${identity.agentDid}`);
-  logStep('Agent', `Selected VC id: ${identity.vcId}`);
-  logStep('Agent', `Scopes: ${requestedScopes.join(', ')}`);
-  logStep('Agent', `Credential expiry: ${expiresAt}`);
+  const identity: AgentIdentity = {
+    agentDid: init.did,
+    kid: init.kid.slice(init.kid.indexOf('#') + 1),
+    signingKeyFile: init.files.signingKey,
+    serviceDid: service.did,
+    chain: [root.hop],
+  };
+  await writeFile(agentIdentityPath, `${JSON.stringify(identity, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  logStep('Setup', `Recorded in ${agentIdentityPath}.`);
 }
 
 main().catch((error: unknown) => {

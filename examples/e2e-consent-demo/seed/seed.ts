@@ -1,42 +1,26 @@
-// e2e-consent-demo seeder (Epic 5 Part A).
+// e2e-consent-demo seeder. Run once, not a service. It:
+//   1. enrolls each demo SP as a service at HelixID, self custody: the SP
+//      generates its own Ed25519 key and sends only the public key; HelixID
+//      hosts its did:web (sp-shared/identity.ts);
+//   2. onboards the Travel Planner Agent, self custody: the operator creates
+//      it (admin POST /v1/agents, keyCustody 'self'), and `helixInit`
+//      generates the agent's key locally and enrolls it with the token. Helix
+//      issues its identity credential and attests its scopes (its Entity
+//      Card); the private key stays in the wallets directory;
+//   3. prints the agent DID, both SP DIDs and the Console URL.
 //
-// Run-once migration, not a service. It:
-//   1. provisions a did:web DID for each demo SP, generating and hosting each
-//      SP's initial status list in the same step (Epic 1 A5's onboarding shape);
-//   2. onboards the Travel Planner Agent against the live HelixID API;
-//   3. prints agent DID, both SP DIDs, both status-list URLs, and Console URL.
-//
-// There is no POST /v1/services call anywhere in this path — the service
-// registry was removed in Epic 1. An SP's identity is its DID, and the only
-// legitimacy check a verifier needs is resolving that DID and checking the
-// signature on what it issued.
+// A user's consent is not seeded: it is given on Helix's consent page, the
+// first time an SP asks (KYA-OS story L3-H).
 
 import 'dotenv/config';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { HelixClient } from '@helixid/sdk-js';
-import {
-  AGENT_PRIVILEGE_SCOPES,
-  DEMO_USER_DID,
-  SPS,
-  agentIdentityPath,
-  env,
-  type AgentIdentity,
-} from '../helixid-config/index.js';
-import { provisionSpIdentity, statePath } from '../sp-shared/identity.js';
-
-const AGENT_ID = 'travel-planner';
+import { mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { helixInit } from '@helixid/sdk-js';
+import { AGENT_PRIVILEGE_SCOPES, SPS, agentDir, env } from '../helixid-config/index.js';
+import { enrollSpService } from '../sp-shared/identity.js';
 
 function log(actor: 'Setup' | 'SP' | 'Helix ID' | 'Agent', message: string): void {
   console.log(`[${actor}] ${message}`);
-}
-
-/** The agent's recorded onboarding result, or null on a first run. */
-async function readIdentity(path: string): Promise<AgentIdentity | null> {
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as AgentIdentity;
-  } catch {
-    return null;
-  }
 }
 
 async function waitForApi(url: string, attempts = 60): Promise<void> {
@@ -55,86 +39,53 @@ async function waitForApi(url: string, attempts = 60): Promise<void> {
   throw new Error(`HelixID API at ${url} did not become healthy in time.`);
 }
 
-async function mintToken(displayName: string, scopes: string[]): Promise<string> {
-  const res = await fetch(`${env.helixApiUrl}/v1/enrollment-tokens`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      agentName: displayName,
-      requestedScopes: scopes,
-      requestedDomains: [],
-      maxDelegationDepth: 0,
-    }),
-  });
-  const body = (await res.json()) as { token?: string };
-  if (!res.ok || !body.token) {
-    throw new Error(`Failed to mint enrollment token: HTTP ${res.status}`);
+/** The agent's DID, onboarding it on a first run. */
+async function onboardAgent(): Promise<string> {
+  const dir = agentDir(env.walletsDir);
+  const existing = await readFile(join(dir, 'helix-agent.json'), 'utf8').catch(() => null);
+  if (existing) {
+    const { did } = JSON.parse(existing) as { did: string };
+    log('Setup', `Agent already onboarded; reusing ${did}.`);
+    return did;
   }
-  return body.token;
+  const res = await fetch(`${env.helixApiUrl}/v1/agents`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': env.adminApiKey },
+    body: JSON.stringify({ name: 'Travel Planner Agent', scopes: AGENT_PRIVILEGE_SCOPES, keyCustody: 'self' }),
+  });
+  const created = (await res.json()) as { did?: string; enrollmentToken?: string; error?: { message?: string } };
+  if (!res.ok || !created.enrollmentToken) throw new Error(created.error?.message ?? `agent creation failed: HTTP ${res.status}`);
+  // The key is generated here and never leaves this directory; Helix gets the public key and a proof of possession.
+  const init = await helixInit({ apiUrl: env.helixApiUrl, enrollmentToken: created.enrollmentToken, outDir: dir });
+  log('Helix ID', `Onboarded agent ${init.did} (${init.label}, status ${init.status}).`);
+  return init.did;
 }
 
 async function main(): Promise<void> {
   await mkdir(env.walletsDir, { recursive: true });
-
-  // ── 1. SP identities: did:web + initial status list, together ───────────
-  const provisioned: Array<{ id: string; did: string; statusListUrl: string }> = [];
-  for (const sp of SPS) {
-    const { identity, statusList, created } = await provisionSpIdentity({
-      dir: env.walletsDir,
-      spId: sp.id,
-      host: env.host,
-      port: sp.port,
-    });
-
-    if (created) {
-      // Seed the SP's persisted state with the status list generated alongside
-      // its DID, so the server hosts the same list the DID was provisioned with.
-      await writeFile(
-        statePath(env.walletsDir, sp.id),
-        JSON.stringify({ statusList, grants: [] }, null, 2),
-        'utf8',
-      );
-      log('SP', `Provisioned ${sp.displayName}: ${identity.did}`);
-      log('SP', `  status list -> ${identity.statusListUrl}`);
-    } else {
-      log('SP', `${sp.displayName} already provisioned (${identity.did}); reusing.`);
-    }
-
-    provisioned.push({ id: sp.id, did: identity.did, statusListUrl: identity.statusListUrl });
-  }
-
-  // ── 2. Travel Planner Agent onboarding (server custody) ─────────────────
   await waitForApi(env.helixApiUrl);
 
-  const identityFile = agentIdentityPath(env.walletsDir, AGENT_ID);
-  let identity = await readIdentity(identityFile);
-
-  if (identity) {
-    log('Setup', `Agent "${AGENT_ID}" already onboarded; reusing ${identity.agentDid}.`);
-  } else {
-    const token = await mintToken('Travel Planner Agent', [...AGENT_PRIVILEGE_SCOPES]);
-    const client = new HelixClient(env.helixApiUrl, { adminApiKey: env.adminApiKey });
-    // Two calls on purpose: minting the enrollment token is the agent owner's
-    // action, onboarding redeems it. Console does both in one step; a script
-    // does them back to back. There is no wallet, passphrase or local key any
-    // more — the server generates and holds the agent's key.
-    identity = await client.onboardAgent(token, []);
-    await writeFile(identityFile, JSON.stringify(identity, null, 2), 'utf8');
-    log('Helix ID', `Onboarded agent ${identity.agentDid} (credential ${identity.vcId}).`);
+  const enrolled: Array<{ id: string; did: string }> = [];
+  for (const sp of SPS) {
+    const { identity, created } = await enrollSpService({
+      dir: env.walletsDir,
+      definition: sp,
+      host: env.host,
+      port: sp.port,
+      helixApiUrl: env.helixApiUrl,
+      adminApiKey: env.adminApiKey,
+    });
+    log('SP', created ? `Enrolled ${sp.displayName}: ${identity.did}` : `${sp.displayName} already enrolled (${identity.did}); reusing.`);
+    enrolled.push({ id: sp.id, did: identity.did });
   }
 
-  const agentDid = identity.agentDid;
+  const agentDid = await onboardAgent();
 
-  // ── 3. Summary ──────────────────────────────────────────────────────────
   console.log('');
   log('Setup', 'Seed complete.');
   log('Agent', `Travel Planner DID : ${agentDid}`);
-  log('Agent', `Authority scopes   : ${AGENT_PRIVILEGE_SCOPES.join(', ')}`);
-  log('Agent', `End user           : ${DEMO_USER_DID}`);
-  for (const sp of provisioned) {
-    log('SP', `${sp.id} DID          : ${sp.did}`);
-    log('SP', `${sp.id} status list  : ${sp.statusListUrl}`);
-  }
+  log('Agent', `Attested scopes    : ${AGENT_PRIVILEGE_SCOPES.join(', ')}`);
+  for (const sp of enrolled) log('SP', `${sp.id} DID          : ${sp.did}`);
   log('Setup', `Console            : ${env.consoleUrl}`);
 }
 

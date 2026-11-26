@@ -18,43 +18,83 @@ import { Redis } from 'ioredis';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import {
+  AesGcmKeyCustody,
+  AgentRepository,
+  agentRoutes,
+  enrollmentOnboardingHandler,
+  AgentService,
+  auditLogRoutes,
+  auditRoutes,
   buildDIDDocument,
+  createApiAudit,
+  createApiAuditStorage,
+  createDidCache,
+  createHederaClient,
+  createStatusListCache,
+  CredentialService,
+  credentialCardDetails,
+  createEntityCardSource,
+  CustodyRecheckScheduler,
+  custodyRecheckSettings,
+  CustodyRepository,
+  custodyRoutes,
+  CustodyService,
   derivePublicKey,
+  DidKeyRepository,
+  DidRepository,
+  didRoutes,
+  DIDService,
+  EnvSigner,
+  didWebRoutes,
+  registryRoutes,
+  RegistryEntryRepository,
+  RegistryService,
+  HelixRegistryPublisher,
+  deploymentRegistrySource,
+  helixRegistryOrigin,
+  errorHandler,
+  entityCardRoutes,
+  eventRoutes,
+  extractEd25519PublicKeyHexFromDIDDocument,
   generateKeyPair,
   loadConfigFromEnv,
+  publicDidResolver,
+  RedisSignalBus,
+  resolveDID as resolveDIDCore,
   resolveDidMethod,
-  errorHandler,
-  ApiAuditLogger,
-  createHederaClient,
-  createDidCache,
-  createStatusListCache,
-  extractEd25519PublicKeyHexFromDIDDocument,
-  DidRepository,
-  VcRepository,
-  AuditLogRepository,
-  AgentRepository,
-  AgentKeyRepository,
-  ServiceRegistryRepository,
-  PreparedPayloadRepository,
-  DIDService,
-  VCService,
-  VPService,
-  AgentService,
-  AesGcmKeyCustody,
-  PreparedPayloadService,
-  SqliteStore,
-  didRoutes,
-  didWebRoutes,
-  vcRoutes,
-  statusListRoutes,
-  vpRoutes,
-  agentRoutes,
-  auditLogRoutes,
+  revocationRoutes,
+  RevocationService,
+  RevocationSignalPublisher,
+  serviceProviderRoutes,
+  consentRoutes,
+  ConsentRepository,
+  ConsentService,
+  UserKeyService,
+  DbKeyStore,
+  WrappedKeyRepository,
+  resolveKeyEncryptionKey,
+  consentAgentScopes,
+  consentServiceDirectory,
+  ServiceProviderService,
+  ServiceRepository,
   sessionRoutes,
-  preparedPayloadRoutes,
+  SqliteStore,
+  StatusListPublisher,
+  statusListRoutes,
+  StatusListService,
+  VcRepository,
+  vcRoutes,
+  VCService,
+  verifyRoutes,
+  helixStatusListIssuers,
   type DIDDocument,
+  type DidResolver,
   type RedisLike,
+  type RedisPubSubLike,
+  type Signer,
 } from '@helixid/core';
+import { SelfCustodyOnlyKeyStore, selfCustodyAuthorize } from './self-custody.js';
+import { registryOnboarding } from './registry.js';
 
 const config = loadConfigFromEnv();
 const storageAdapter =
@@ -90,15 +130,18 @@ const redis: RedisLike | null =
     ? new Redis(config.REDIS_URL)
     : null;
 
-const auditLogger = new ApiAuditLogger(prisma, config, sqlite);
+// A-2: every audit event enters through the authoritative recorder.
+const auditDeps = { pool, sqlite };
+const audit = createApiAudit(config, createApiAuditStorage(auditDeps), { deps: auditDeps, baseDir: apiPackageDir });
+// Opens every known ledger: a journal behind the restore witness, or a new
+// recorder key, opens a successor epoch here, before any request is served.
+await audit.recorder.start();
+const auditTrail = audit.trail;
 const didRepository = new DidRepository(prisma, sqlite);
 const vcRepository = new VcRepository(prisma, sqlite);
-const auditLogRepository = new AuditLogRepository(prisma, sqlite);
 const agentRepository = new AgentRepository(prisma, sqlite);
-const agentKeyRepository = new AgentKeyRepository(prisma, sqlite);
-const serviceRegistry = new ServiceRegistryRepository(agentRepository);
-const preparedPayloadRepository = new PreparedPayloadRepository(prisma, sqlite);
-await serviceRegistry.seedBuiltIns();
+const didKeyRepository = new DidKeyRepository(prisma, sqlite);
+const serviceRepository = new ServiceRepository(prisma, sqlite);
 
 await ensureIssuerDidCached();
 
@@ -111,7 +154,7 @@ const jwtSessionKeyPair = generateKeyPair();
 const didService = new DIDService(
   didRepository,
   hederaClient,
-  auditLogger,
+  auditTrail,
   didCache,
   config.DID_CACHE_L1_TTL_SECONDS,
   didMethod,
@@ -120,34 +163,167 @@ const didService = new DIDService(
 const vcService = new VCService(
   vcRepository,
   didService,
-  auditLogger,
+  auditTrail,
   config.HELIX_SIGNING_KEY,
   config.HELIX_ISSUER_DID,
   config.API_BASE_URL,
   statusListCache,
   config.STATUS_LIST_CACHE_L1_TTL_SECONDS,
 );
-const vpService = new VPService(vcService, auditLogger, config.API_BASE_URL, {
-  signingKey: jwtSessionKeyPair.privateKey,
-  issuerDid: config.HELIX_ISSUER_DID,
-  ttlSeconds: config.JWT_SESSION_TTL_SECONDS,
-});
 // Agent self-custody has been retired — every agent's private key is now
 // generated and held here, encrypted with this one shared master key. Unset
 // in dev falls back to a random per-process key (fine for local dev; means
-// encrypted AgentKey rows don't survive a restart in that mode).
+// encrypted DidKey rows don't survive a restart in that mode) — same
+// pattern as HOSTED_ACCESS_TOKEN_SECRET below it.
 const agentKeyEncryptionKey = config.HOSTED_KEY_ENCRYPTION_KEY ?? crypto.randomBytes(32).toString('hex');
 const keyCustody = new AesGcmKeyCustody(agentKeyEncryptionKey);
-const preparedPayloadService = new PreparedPayloadService(preparedPayloadRepository, didService);
+// KYA-OS story F-1: identity, attestations and hops. The Helix issuer signs
+// through an EnvSigner (the key stays in HELIX_SIGNING_KEY); custodial keys
+// sign through the key custody. Copies land in the vcs table for the console.
+const helixSigner = new EnvSigner({ did: config.HELIX_ISSUER_DID });
+// Public DID resolution: the keys of revokers and of issuers that sign their own lists.
+const resolvePublicDid: DidResolver = publicDidResolver(resolveDIDCore);
+// KYA-OS story L3-C: one signed Bitstring Status List v1.0 per issuer DID, signed through that issuer's Signer.
+const statusListPublisher: StatusListPublisher = new StatusListPublisher({
+  repo: vcRepository,
+  helixIssuerDid: config.HELIX_ISSUER_DID,
+  apiBaseUrl: config.API_BASE_URL,
+  // The Helix issuer, or a key Helix holds (KeyStore, rule 8); undefined for a self-custody issuer, who signs its own list.
+  signerFor: async (did): Promise<Signer | undefined> => {
+    // KYA-OS story L3-H: a user's did:key signs its own list through the consent KeyStore while its key lives.
+    const userKeySigner = await userKeyService.statusListSignerFor(did);
+    if (userKeySigner !== undefined) return userKeySigner;
+    try {
+      return await credentialService.signerFor(did);
+    } catch {
+      return undefined;
+    }
+  },
+  resolveDid: resolvePublicDid,
+  listTtlSeconds: config.STATUS_LIST_TTL_SECONDS,
+  refreshBeforeSeconds: config.STATUS_LIST_REFRESH_BEFORE_SECONDS,
+  signedCache: statusListCache,
+  audit: auditTrail,
+});
+const statusListService: StatusListService = new StatusListService({ publisher: statusListPublisher, repo: vcRepository, audit: auditTrail });
+const credentialService: CredentialService = new CredentialService(
+  vcRepository,
+  statusListService,
+  didService,
+  helixSigner,
+  didKeyRepository,
+  keyCustody,
+  auditTrail,
+);
+// One SET per revocation, signed by the Helix issuer; across instances through Redis pub/sub when Redis is configured.
+const revocationSignals = new RevocationSignalPublisher({
+  signer: helixSigner,
+  ...(redis && config.REDIS_URL
+    ? { bus: new RedisSignalBus({ publisher: new Redis(config.REDIS_URL) as unknown as RedisPubSubLike, subscriber: new Redis(config.REDIS_URL) as unknown as RedisPubSubLike }) }
+    : {}),
+  webhooks: (config.REVOCATION_WEBHOOK_URLS ?? '').split(',').map((url) => url.trim()).filter((url) => url.length > 0),
+  audit: auditTrail,
+});
+statusListService.setSignals(revocationSignals);
+statusListPublisher.startRefresh();
+const revocationService = new RevocationService({
+  repo: vcRepository,
+  statusLists: statusListService,
+  resolveDid: resolvePublicDid,
+  audience: `${config.API_BASE_URL}/v1/revocations`,
+});
 const agentService = new AgentService(
   agentRepository,
   didService,
   vcService,
-  auditLogger,
-  agentKeyRepository,
+  auditTrail,
+  didKeyRepository,
   keyCustody,
-  preparedPayloadService,
+  credentialService,
 );
+
+// Services are custodial too: same master key and custody object as agents.
+const serviceProviderService = new ServiceProviderService(
+  didService,
+  vcService,
+  serviceRepository,
+  didKeyRepository,
+  keyCustody,
+  auditTrail,
+);
+
+// KYA-OS stories F-3 and C-A on the open-source server: Helix-hosted agents
+// with their DID documents and Entity Cards, self-custody only. The agent
+// generates and holds its key (helix init / helix activate); Helix learns only
+// the public JWK. So there is no DbKeyStore here: the custody service gets a
+// KeyStore that holds nothing, the custody routes refuse keyCustody 'helix'
+// and /sign (see self-custody.ts), and no grant, hop or status list is signed
+// with a custodial key.
+const custodyService = new CustodyService({
+  records: new CustodyRepository(prisma, sqlite),
+  keyStore: new SelfCustodyOnlyKeyStore(),
+  didRepository,
+  credentials: credentialService,
+  services: serviceRepository,
+  auditTrail,
+  host: config.DID_DOMAIN,
+  didCache,
+  recheck: custodyRecheckSettings(config),
+  credentialDetails: credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did), omitResponsibleParty: true }),
+  // KYA-OS story C-E: a self-custody agent rotates its key with the SDK's rotateKey();
+  // both keys stay listed for KEY_ROTATION_OVERLAP_SECONDS, and its leaf hops are reissued.
+  rotationOverlapSeconds: config.KEY_ROTATION_OVERLAP_SECONDS,
+  hopReissuer: credentialService,
+});
+// Agents created through the custody routes are agents to the service-provider
+// service too (getAgentScopes), as in core's and enterprise's server.ts: without
+// this, a consent request for one of them skipped the attested-scope ceiling.
+serviceProviderService.attachCustodialKeys(custodyService);
+// KYA-OS story L3-H: the user's pairwise did:key, which signs the root of a consent chain on the
+// user's click, is the one key helixid holds (the consent key is always Helix-held; agents and
+// services stay self-custody). It lives in its own DbKeyStore (wrapped_keys, AES-256-GCM under
+// HELIX_KEY_STORE_KEK, else HOSTED_KEY_ENCRYPTION_KEY; an ephemeral key outside production).
+const consentKeyEncryption = resolveKeyEncryptionKey(config);
+const consentKeyStore = new DbKeyStore({
+  table: new WrappedKeyRepository(prisma, sqlite),
+  keyEncryptionKey: consentKeyEncryption.keyEncryptionKey,
+  keyEncryptionKeyId: consentKeyEncryption.keyEncryptionKeyId,
+});
+const consentRepository = new ConsentRepository(prisma, sqlite);
+const userKeyService: UserKeyService = new UserKeyService({ repo: consentRepository, keyStore: consentKeyStore, audit: auditTrail });
+const consentService = new ConsentService({
+  repo: consentRepository,
+  userKeys: userKeyService,
+  credentials: credentialService,
+  revocations: revocationService,
+  resolveDid: resolvePublicDid,
+  apiBaseUrl: config.API_BASE_URL,
+  serviceOf: consentServiceDirectory({ services: serviceRepository, custody: custodyService }),
+  agentScopesOf: consentAgentScopes(serviceProviderService),
+  audit: auditTrail,
+  requestTtlSeconds: config.CONSENT_REQUEST_TTL_SECONDS,
+  maxWindowSeconds: config.CONSENT_MAX_WINDOW_SECONDS,
+});
+// Cards of agents acting on user consent leave responsibleParty out (L3-H): each chain's root is its own.
+// Own authority (four-clients, 2026-11-24): agent cards name no responsibleParty, so an agent may call a
+// service that opts in on its own attested capabilities; a chain it carries is checked against its own root.
+const consentCardDetails = credentialCardDetails(vcService, { actsOnUserConsent: (did) => consentRepository.hasRequestForAgent(did), omitResponsibleParty: true });
+
+// Own-hosted agents waiting for their documents are re-checked in the background.
+const custodyRecheck = new CustodyRecheckScheduler(custodyService, { tickSeconds: config.CUSTODY_RECHECK_TICK_SECONDS });
+
+// Registry v3: "Make discoverable" at onboarding, and the Helix agent registry (fixed origin; a local run
+// overrides it with a test-only variable). helixid holds no key, so a discoverable agent's holder registers it
+// there with the SDK.
+const registryEntryRepository = new RegistryEntryRepository(prisma, sqlite);
+const helixRegistryPublisher = new HelixRegistryPublisher({
+  deployment: config.API_BASE_URL,
+  helixOrigin: helixRegistryOrigin(),
+  signerFor: async () => undefined,
+  log: (message) => console.info(`[registry] ${message}`),
+});
+const onboarding = registryOnboarding({ entries: registryEntryRepository, publisher: helixRegistryPublisher });
+const selfCustodyAuthorizer = selfCustodyAuthorize(config.HELIX_ADMIN_API_KEY);
 
 const app = Fastify({
   logger: {
@@ -155,6 +331,10 @@ const app = Fastify({
     redact: ['req.headers.authorization', 'req.body.privateKey', 'req.body.privateKeyHex'],
   },
   genReqId: () => `req_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`,
+  // KYA-OS story L3-C: a per-issuer status list's id is `iss-` + base64url(issuer DID), and a hosted
+  // did:web makes it longer than Fastify's default 100-character route parameter (414). 2048 holds
+  // the id of any DID a URL can carry.
+  routerOptions: { maxParamLength: 2048 },
 });
 
 app.addSchema({
@@ -187,6 +367,11 @@ app.get('/health', async () => ({
   storageAdapter,
   database: usingPostgres ? databaseName : usingSqlite ? sqlitePath : 'disabled',
   cacheAdapter,
+  // didMethod/issuerDid: exposed so test harnesses (see
+  // tests/utils/liveApi.ts) can read back the actual resolved issuer DID
+  // instead of duplicating loadConfig()'s did:key/did:web auto-derivation
+  // logic — the issuer DID isn't always known in advance (e.g. did:web's
+  // domain includes a dynamically-chosen port in tests).
   didMethod,
   issuerDid: config.HELIX_ISSUER_DID,
 }));
@@ -228,45 +413,109 @@ async function ensureIssuerDidCached(): Promise<void> {
 
 await app.register(didRoutes, { didService });
 await app.register(didWebRoutes, { issuerDid: config.HELIX_ISSUER_DID, didDomain: config.DID_DOMAIN, didRepository });
+// Registry v3 (2026-11-24): GET /agent/registry/:did for this deployment's discoverable agents, which the
+// Helix registry checks a registration against. The registry itself is the Helix one. See registry.ts.
+await app.register(registryRoutes, {
+  registry: new RegistryService(
+    deploymentRegistrySource({
+      deployment: config.API_BASE_URL,
+      owner: { did: config.HELIX_ISSUER_DID, name: null },
+      entries: registryEntryRepository,
+      custody: custodyService,
+      didRepository,
+    }),
+  ),
+});
 await app.register(vcRoutes, {
   prefix: '/v1/vcs',
   vcService,
+  credentialService,
+  statusLists: statusListService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
-});
-// vcService is required as of core's grant-persistence change: /grant/finalize
-// now registers the SP-signed consent credential so the platform holds it.
-// Agent self-custody is retired, so there is no agent-side wallet left that
-// could hold it instead.
-await app.register(preparedPayloadRoutes, {
-  prefix: '/v1/vcs',
-  preparedPayloadService,
-  vcService,
 });
 await app.register(statusListRoutes, {
   prefix: '/v1/status-list',
-  vcService,
+  statusLists: statusListService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
-await app.register(vpRoutes, { prefix: '/v1/vp', vpService });
+// KYA-OS story L3-C: signed revocation requests, cascading, and the revocation signal (SSE + RFC 8935 push).
+await app.register(revocationRoutes, {
+  prefix: '/v1/revocations',
+  revocations: revocationService,
+  signerFor: (did) => credentialService.signerFor(did),
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+});
+await app.register(eventRoutes, { prefix: '/v1/events', signals: revocationSignals, adminApiKey: config.HELIX_ADMIN_API_KEY });
+// KYA-OS story F-2: the local verifier over HTTP; /v1/vp/verify is retired. It reads no database.
+await app.register(verifyRoutes, {
+  prefix: '/v1/verify',
+  allowLoopbackHttp: config.NODE_ENV !== 'production',
+  // The Helix issuer keeps the identity list every hosted card names (§10.3); without
+  // this binding the spec-strict keeper rule refuses every Helix-hosted agent here.
+  statusListIssuers: helixStatusListIssuers(config.HELIX_ISSUER_DID, config.API_BASE_URL),
+});
 await app.register(sessionRoutes, {
   prefix: '/v1/sessions',
   publicKeyHex: jwtSessionKeyPair.publicKey,
 });
 await app.register(auditLogRoutes, {
   prefix: '/v1/audit-log',
-  auditLogRepository,
-  auditLogger,
+  audit,
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+});
+await app.register(auditRoutes, {
+  prefix: '/v1/audit',
+  audit,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
 });
 await app.register(agentRoutes, {
   prefix: '/v1',
   agentService,
+  credentialService,
   adminApiKey: config.HELIX_ADMIN_API_KEY,
+  // KYA-OS story F-3: the custody routes own POST /v1/agents.
+  createAgentRoute: false,
 });
+await app.register(serviceProviderRoutes, {
+  prefix: '/v1',
+  serviceProviderService,
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+  // KYA-OS story L3-H: a service that keeps its own key (keyCustody 'self') signs its own consent
+  // requests; it is created by the custody service like a self-custody agent ('helix' is refused here).
+  custody: { service: custodyService },
+});
+await app.register(custodyRoutes, {
+  prefix: '/v1',
+  custodyService,
+  authorize: async (request, action) => {
+    await selfCustodyAuthorizer(request, action);
+    if (action.action === 'createAgent') onboarding.check(request);
+  },
+  // Registry v3: the "Make discoverable" choice; a discoverable agent is registered with the Helix registry once active.
+  onCreated: (request, result) => (result.subjectType === 'agent' ? onboarding.created(request, result.did) : undefined),
+  onActivated: (_request, result) => onboarding.activated(result),
+  // A POST /v1/agents body with enrollmentToken is story F-1's token onboarding, unchanged.
+  enrollmentOnboarding: enrollmentOnboardingHandler(agentService),
+  // KYA-OS story C-E point 5: an ancestor issuer of an agent's delegations may revoke its compromised key.
+  keyRevocations: revocationService,
+});
+// KYA-OS story L3-H: consent requests, the consent page at authorizationUrl, renewal, withdrawal.
+await app.register(consentRoutes, {
+  consent: consentService,
+  userKeys: userKeyService,
+  adminApiKey: config.HELIX_ADMIN_API_KEY,
+  secureCookie: config.API_BASE_URL.startsWith('https:'),
+});
+// KYA-OS story C-A: /{path}/did.json, /{path}/card.json and /.well-known/kya-os-card.json; after the static routes, so the wildcard never shadows them.
+await app.register(entityCardRoutes, { source: createEntityCardSource({ host: config.DID_DOMAIN, didRepository, services: serviceRepository, details: (did) => custodyService.cardDetails(did), credentials: consentCardDetails }) });
 
 const shutdown = async (): Promise<void> => {
   app.log.info('Helix ID API shutting down...');
   await app.close();
+  await custodyRecheck.stop();
+  userKeyService.stopShredding();
+  statusListPublisher.stopRefresh();
+  await revocationSignals.close();
   (redis as Redis | null)?.disconnect();
   await prisma?.$disconnect();
   await pool?.end();
@@ -279,6 +528,8 @@ process.on('SIGINT', () => void shutdown());
 const start = async (): Promise<void> => {
   try {
     await app.listen({ port: config.PORT, host: '0.0.0.0' });
+    if (config.CUSTODY_RECHECK_ENABLED) custodyRecheck.start();
+    if (config.USER_KEY_SHRED_INTERVAL_SECONDS > 0) userKeyService.startShredding(config.USER_KEY_SHRED_INTERVAL_SECONDS * 1000);
   } catch (err) {
     app.log.error(err);
     process.exit(1);

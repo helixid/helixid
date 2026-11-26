@@ -26,24 +26,18 @@ export const TOOLS = {
 export const PROTECTED_TOOL = TOOLS.BOOK;
 
 /**
- * The service the VP is bound to. The agent stamps this into every presentation
- * (`targetService`) and the MCP server is the audience. It is a plain string
- * identifier — not a URL — and does not need to be pre-registered for the
- * shipped verify + scope path this demo uses.
+ * The Service Provider the MCP server plays. It is enrolled once as a service
+ * on HelixID (self custody: Helix hosts its did:web, the service keeps its own
+ * key in the shared volume). Every request proof names its DID as the audience
+ * and every hop names it as the target.
  */
-export const TARGET_SERVICE = 'travel-booking-mcp';
+export const SERVICE_NAME = 'Helix Air (travel concierge)';
 
 /**
- * A demo user DID the agent claims to act on behalf of. In production this
- * comes from a real user-DID verification flow before the agent acts; here it
- * is a fixed placeholder so the happy path is deterministic.
- */
-export const USER_DID = 'did:web:demo-traveler';
-
-/**
- * The one persona enrolled at setup time, so the demo works immediately. It can
- * both search and book. Additional agents are enrolled at runtime from the web
- * UI by pasting a Console-generated onboarding token.
+ * The one persona enrolled at setup time, so the demo works immediately. It is
+ * attested for both scopes and its responsible party gives it both at the
+ * service. Additional agents are enrolled at runtime from the web UI by pasting
+ * a Console-generated enrollment token.
  */
 export const INITIAL_PERSONA = {
   id: 'concierge',
@@ -59,22 +53,27 @@ function required(name: string): string {
 
 const walletsDir = process.env.WALLETS_DIR ?? '/wallets';
 
-/** Encrypted wallet file for a given persona, on the shared volume. */
-export function walletPathFor(personaId: string): string {
-  return join(walletsDir, `${personaId}.enc`);
+/**
+ * A persona's own key directory on the shared volume: `helix init` writes its
+ * DID document, card, summary and `signing-key.env` there. Self custody: the
+ * key never leaves this directory, and the browser never sees it.
+ */
+export function keyDirFor(personaId: string): string {
+  return join(walletsDir, personaId);
 }
 
 /** Config resolved from the environment, with container-friendly defaults. */
 export const env = {
   /** Internal HelixID API URL (compose service DNS name inside the network). */
   helixApiUrl: process.env.HELIX_API_URL ?? 'http://helix-api:3000',
-  /** Admin key used by Console and admin API surfaces; runtime onboarding consumes Console tokens. */
+  /** Admin key: creates agents and the service, issues root hops and revokes (the organization's operator credential). */
   adminApiKey: process.env.HELIX_ADMIN_API_KEY ?? 'dev-admin-key-change-in-production',
-  /** Directory holding per-persona wallets + the persona manifest. */
+  /** Directory holding the per-persona key directories, the persona manifest and the service's identity. */
   walletsDir,
   /** Manifest listing every enrolled persona (survives restarts on the volume). */
   personaManifestPath: join(walletsDir, 'personas.json'),
-  walletPassphrase: process.env.WALLET_PASSPHRASE ?? 'demo-passphrase',
+  /** The MCP service's DID and its own key (mode 0600). */
+  serviceIdentityPath: join(walletsDir, 'mcp-service.json'),
   /** MCP server URL the agent connects to. */
   mcpServerUrl: process.env.MCP_SERVER_URL ?? 'http://mcp-server:7100/mcp',
   /** Ports. */
@@ -82,7 +81,7 @@ export const env = {
   agentPort: Number(process.env.AGENT_PORT ?? 4000),
   /** LLM provider selection. */
   llmProvider: (process.env.LLM_PROVIDER ?? 'anthropic') as 'anthropic' | 'openai' | 'azure' | 'gemini',
-  llmApiKeyOrThrow: () => required('LLM_API_KEY'),
+  llmApiKeyOrThrow: (): string => required('LLM_API_KEY'),
   /** Optional model override — currently only read by the Gemini provider. */
   llmModel: process.env.LLM_MODEL || undefined,
   /**
@@ -90,8 +89,8 @@ export const env = {
    * the Azure resource key; the "model" is your chat deployment name.
    */
   azureOpenAI: {
-    endpointOrThrow: () => required('AZURE_OPENAI_ENDPOINT'),
-    deploymentOrThrow: () => required('AZURE_OPENAI_DEPLOYMENT'),
+    endpointOrThrow: (): string => required('AZURE_OPENAI_ENDPOINT'),
+    deploymentOrThrow: (): string => required('AZURE_OPENAI_DEPLOYMENT'),
     apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? '2024-10-21',
   },
 };

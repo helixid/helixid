@@ -1,87 +1,71 @@
-// SP identity provisioning.
-//
-// This is the programmatic equivalent of Epic 1's onboarding command,
-// `helix did create --method web`, which since A5 produces BOTH artifacts in
-// one step: the did:web document and the SP's initial status list. The seeder
-// calls provisionSpIdentity() once; each SP server calls loadSpIdentity() on
-// boot and hosts what it finds.
-//
-// Done with core primitives rather than by shelling out to the CLI so the
-// seeder cannot be killed by the CLI's process.exit() error path. The output
-// is the same shape the CLI writes.
+// SP identity: a service enrolled at HelixID (admin POST /v1/services) that
+// keeps its own key (self custody) while HelixID hosts its did:web
+// (did:web:<api-host>:services:<hex>). The SP signs its consent requests and
+// its response proofs with that key (KYA-OS stories L2-A, L3-H); HelixID never
+// sees it. The seeder writes the identity and the key to a small local JSON
+// file once (a demo: a real service keeps its key in a secret store).
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { generateKeyPair, kyaos } from '@helixid/sdk-js';
 import { join } from 'node:path';
-import {
-  buildStatusListCredential,
-  createStatusList,
-  generateKeyPair,
-  type StatusListCredential,
-} from '@helixid/sdk-js';
-import { spDidFor } from '../helixid-config/index.js';
-
-/** Generous by design: grant indices are assigned randomly, unused bits are free. */
-export const STATUS_LIST_LENGTH = 131072;
+import type { SpDefinition } from '../helixid-config/index.js';
 
 export interface SpIdentityFile {
+  serviceId: string;
   did: string;
-  privateKeyHex: string;
-  publicKeyHex: string;
-  statusListUrl: string;
   baseUrl: string;
+  /** The SP's Ed25519 private key (hex): key-1 of its did:web document. */
+  signingKey: string;
 }
 
 function identityPath(dir: string, spId: string): string {
   return join(dir, `sp-${spId}.identity.json`);
 }
 
-export function statePath(dir: string, spId: string): string {
-  return join(dir, `sp-${spId}.state.json`);
-}
-
-export async function provisionSpIdentity(params: {
+export async function enrollSpService(params: {
   dir: string;
-  spId: string;
+  definition: SpDefinition;
   host: string;
   port: number;
-}): Promise<{ identity: SpIdentityFile; statusList: StatusListCredential; created: boolean }> {
-  const path = identityPath(params.dir, params.spId);
+  helixApiUrl: string;
+  /** The operator's admin key. */
+  adminApiKey: string;
+}): Promise<{ identity: SpIdentityFile; created: boolean }> {
+  const { definition } = params;
+  const path = identityPath(params.dir, definition.id);
 
-  try {
-    const existing = JSON.parse(await readFile(path, 'utf8')) as SpIdentityFile;
-    const statusList = JSON.parse(
-      await readFile(statePath(params.dir, params.spId), 'utf8'),
-    ) as { statusList: StatusListCredential };
-    return { identity: existing, statusList: statusList.statusList, created: false };
-  } catch {
-    // Not provisioned yet — fall through and create.
+  const existing = await readFile(path, 'utf8').catch(() => null);
+  if (existing) {
+    return { identity: JSON.parse(existing) as SpIdentityFile, created: false };
   }
 
-  const keyPair = generateKeyPair();
-  const did = spDidFor(params.host, params.port);
   const baseUrl = `http://${params.host}:${params.port}`;
-  const statusListUrl = `${baseUrl}/status-list/1`;
+  const keys = generateKeyPair();
+  const response = await fetch(new URL('/v1/services', params.helixApiUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': params.adminApiKey },
+    body: JSON.stringify({
+      // Service names are unique across the deployment; the consent page shows the display name each request sends.
+      name: `${definition.displayName} (${params.host}:${params.port})`,
+      domain: `${params.host}:${params.port}`,
+      requiredScopes: definition.scopeCatalog.map((entry) => entry.scope),
+      description: `${definition.displayName} (e2e-consent-demo)`,
+      framework: 'express',
+      keyCustody: 'self',
+      didHosting: 'helix',
+      publicKeyJwk: kyaos.publicKeyHexToJwk(keys.publicKey),
+    }),
+  });
+  const body = (await response.json()) as { id?: string; did?: string; service?: { id?: string }; error?: { message?: string } };
+  const serviceId = body.id ?? body.service?.id;
+  if (!response.ok || !serviceId || !body.did) {
+    throw new Error(body.error?.message ?? `service enrollment failed: HTTP ${response.status}`);
+  }
 
-  const identity: SpIdentityFile = {
-    did,
-    privateKeyHex: keyPair.privateKey,
-    publicKeyHex: keyPair.publicKey,
-    statusListUrl,
-    baseUrl,
-  };
-
-  // Same shared StatusListCredential shape helix-api uses for its own lists.
-  const statusList = buildStatusListCredential(
-    '1',
-    createStatusList(STATUS_LIST_LENGTH),
-    did,
-    baseUrl,
-  );
-
+  const identity: SpIdentityFile = { serviceId, did: body.did, baseUrl, signingKey: keys.privateKey };
   await mkdir(params.dir, { recursive: true });
-  await writeFile(path, JSON.stringify(identity, null, 2), 'utf8');
-
-  return { identity, statusList, created: true };
+  await writeFile(path, JSON.stringify(identity, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return { identity, created: true };
 }
 
 export async function loadSpIdentity(dir: string, spId: string): Promise<SpIdentityFile> {
@@ -89,8 +73,6 @@ export async function loadSpIdentity(dir: string, spId: string): Promise<SpIdent
   try {
     return JSON.parse(await readFile(path, 'utf8')) as SpIdentityFile;
   } catch {
-    throw new Error(
-      `SP "${spId}" is not provisioned (${path} not found). Run the seeder first: pnpm run setup`,
-    );
+    throw new Error(`SP "${spId}" is not enrolled (${path} not found). Run: pnpm run setup`);
   }
 }

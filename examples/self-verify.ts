@@ -1,271 +1,121 @@
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { config as loadEnv } from 'dotenv';
+// Copyright 2026 DgVerse LLP
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// The service verifies every call itself, in-process, step by step (KYA-OS
+// story F-2): no Helix API call decides anything. It reads the agent's DID
+// document, card and status lists from where they are published, and runs
+// `createLocalVerifier` from `@helixid/mcp-middleware`, the same verifier the
+// MCP middleware puts in front of every tool. This is the KYA-OS default, not
+// an alternative path.
+//
+//   1. setup: a service, a self-custody agent (`helix init`) and its root hop;
+//   2. what the verifier reads: the DID document, the signing key in it, the
+//      agent's card (its responsible party and attested capabilities);
+//   3. one call verified: proof signature, audience, request hash, nonce,
+//      card, each hop's signature and attenuation, live status, level;
+//   4. each check shown refusing on purpose: a tampered request, a proof for
+//      another service, a replay, an action the chain does not allow, a
+//      cached status read (L2, below this service's L3), and a revoked hop.
+//
+// Run: HELIX_ADMIN_API_KEY=... pnpm example:self-verify
+// (HELIX_API_URL defaults to http://localhost:3000; against a local helixid
+// the verifier reads http on loopback.)
+
+import { createLocalVerifier } from '@helixid/mcp-middleware';
 import {
-  base58btcDecode,
-  getBit,
-  hashCanonicalPayload,
-  multibaseToPublicKeyHex,
-  verifySignature,
-} from '@helixid/sdk-js';
-import { createFreshSignedVP } from './verifier-example-utils.js';
+  API,
+  call,
+  cardOf,
+  createSelfCustodyAgent,
+  createService,
+  fail,
+  finish,
+  requireAdminKey,
+  rootHop,
+  runSuffix,
+  show,
+  signCall,
+  acceptable,
+  type SignedCall,
+  type Verdict,
+} from './kyaos-example-utils.js';
 
-// Use self-verification when the verifier cannot or does not want to call
-// POST /v1/vp/verify for every request. The tradeoff is sharp: you now own
-// VP signature checks, VC signature checks, DID resolution, expiry, StatusList
-// revocation, target service binding, delegatedBy validation, and replay storage.
-// Missing one check is a security gap.
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-loadEnv({ path: join(__dirname, '..', '.env') });
-
-const helixApiUrl = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const targetService = process.env.TARGET_SERVICE ?? 'amazon';
-const issuerPublicKeyHexFromEnv = process.env.HELIX_ISSUER_PUBLIC_KEY;
-
-type Proof = {
-  proofValue: string;
-};
-
-type SignedVC = {
-  id: string;
-  issuer: string;
-  validFrom: string;
-  validUntil: string;
-  credentialStatus: {
-    statusListIndex: string;
-    statusListCredential: string;
-  };
-  credentialSubject: {
-    privilegeScopes: string[];
-  };
-  proof: Proof;
-  [key: string]: unknown;
-};
-
-type SignedVP = {
-  id: string;
-  holder: string;
-  nonce: string;
-  expirationDate: string;
-  delegatedBy: string;
-  targetService: string;
-  verifiableCredential: [SignedVC, ...SignedVC[]];
-  proof: Proof;
-  [key: string]: unknown;
-};
-
-function proofToSignatureHex(proofValue: string): string {
-  const raw = proofValue.startsWith('z') ? proofValue.slice(1) : proofValue;
-  return Buffer.from(base58btcDecode(raw)).toString('hex');
-}
-
-async function verifyProof(
-  payload: Record<string, unknown>,
-  proof: Proof,
-  publicKeyHex: string,
-): Promise<boolean> {
-  const hash = hashCanonicalPayload(payload);
-  return verifySignature(hash, proofToSignatureHex(proof.proofValue), publicKeyHex);
-}
-
-function publicKeyFromDidDocument(didDocument: {
-  verificationMethod?: Array<{ type?: string; publicKeyHex?: string; publicKeyMultibase?: string }>;
-}): string {
-  const method = didDocument.verificationMethod?.find((item) => item.type?.includes('Ed25519'));
-  if (!method) throw new Error('DID document has no Ed25519 verification method');
-  if (method.publicKeyHex) return method.publicKeyHex;
-  if (method.publicKeyMultibase) return multibaseToPublicKeyHex(method.publicKeyMultibase);
-  throw new Error('DID document has no public key material');
-}
-
-function fail(step: string, reason: string): never {
-  console.log(`[Self Verify] ${step}: FAIL - ${reason}`);
-  console.log(`[Self Verify] NOT TRUSTED`);
-  process.exit(1);
-}
-
-async function resolveDidDocument(did: string): Promise<{
-  verificationMethod?: Array<{ type?: string; publicKeyHex?: string; publicKeyMultibase?: string }>;
-}> {
-  // Direct did:web resolution: transform the DID into the issuer's did.json URL
-  // and fetch it directly. This avoids calling the Helix API for DID resolution
-  // and keeps self-verification general-purpose.
-  if (!did.startsWith('did:web:')) {
-    throw new Error(`Unsupported DID method for direct fetch resolver: ${did}`);
-  }
-
-  const parts = did.split(':');
-  const decoded = parts.slice(2).map(decodeURIComponent);
-  let [host, ...pathParts] = decoded;
-  if (!host) throw new Error(`Invalid did:web DID: ${did}`);
-
-  // Compatibility: accept legacy/local did:web forms like did:web:localhost:3000
-  // and did:web:127.0.0.1:3000 where port was not percent-encoded.
-  function isLoopbackHost(hostname: string): boolean {
-    const normalized = hostname.toLowerCase();
-    return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
-  }
-
-  if (isLoopbackHost(host) && pathParts.length > 0 && /^\d+$/.test(pathParts[0] ?? '')) {
-    host = `${host}:${pathParts[0]}`;
-    pathParts = pathParts.slice(1);
-  }
-
-  let hostname: string;
-  try {
-    hostname = new URL(`http://${host}`).hostname;
-  } catch {
-    throw new Error(`Invalid did:web DID: ${did}`);
-  }
-
-  const path =
-    pathParts.length === 0 ? '/.well-known/did.json' : `/${pathParts.join('/')}/did.json`;
-  const scheme = isLoopbackHost(hostname) ? 'http' : 'https';
-  const url = `${scheme}://${host}${path}`;
-
-  const didResponse = await fetch(url, {
-    headers: { accept: 'application/did+json, application/json' },
-  });
-  if (!didResponse.ok) {
-    throw new Error(
-      `DID resolution failed for ${did} with HTTP ${didResponse.status} when fetching ${url}`,
-    );
-  }
-  const doc = (await didResponse.json()) as {
-    id?: string;
-    verificationMethod?: Array<{
-      type?: string;
-      publicKeyHex?: string;
-      publicKeyMultibase?: string;
-    }>;
-  };
-  if (!doc || doc.id !== did) {
-    throw new Error(`Invalid or mismatched DID document for ${did}`);
-  }
-  return doc;
-}
-
-async function resolvePublicKeyHex(did: string): Promise<string> {
-  if (did.startsWith('did:key:')) {
-    const multibase = did.slice('did:key:'.length);
-    return multibaseToPublicKeyHex(multibase);
-  }
-  const didDocument = await resolveDidDocument(did);
-  return publicKeyFromDidDocument(didDocument);
-}
+const SCOPE = 'read:catalog';
+const OTHER_SCOPE = 'write:orders';
 
 async function main(): Promise<void> {
-  console.log('[Self Verify] Step 1 - Create fresh VP');
-  const fresh = await createFreshSignedVP({
-    helixApiUrl,
-    targetService,
-    requiredScope: 'read:orders',
+  requireAdminKey();
+  const suffix = runSuffix();
+
+  console.log('[1] setup: a service, a self-custody agent, its root hop...');
+  const service = await createService(`catalog-${suffix}`, [SCOPE, OTHER_SCOPE]);
+  const other = await createService(`elsewhere-${suffix}`, [SCOPE]);
+  const agent = await createSelfCustodyAgent(`catalog-agent-${suffix}`, [SCOPE]);
+  const chain = [await rootHop(agent.did, service.did, [SCOPE])];
+  console.log(`    service ${service.did}\n    agent   ${agent.did}`);
+
+  // The service's own verifier. Its only Helix-specific setting binds the
+  // Helix issuer to the status list every hosted card names (keeper rule,
+  // SPEC-ENTITY-CARD §10.3); everything else is read from public documents.
+  const health = await call<{ issuerDid: string }>('GET', '/health', undefined, false);
+  const verifier = createLocalVerifier({
+    serviceDid: service.did,
+    catalog: [SCOPE, OTHER_SCOPE],
+    allowLoopbackHttp: true,
+    statusListIssuers: { [health.issuerDid]: [`${API}/v1/status-list/helix-status-list-1`] },
+    reportVerification: () => undefined,
   });
-  const signedVP = fresh.signedVP;
-  const vc = signedVP.verifiableCredential[0];
-  console.log(`  agent DID: ${signedVP.holder}`);
-  console.log(`  user DID delegatedBy: ${signedVP.delegatedBy}`);
-  console.log(`  vpId: ${signedVP.id}`);
-  console.log(`  nonce: ${signedVP.nonce}`);
-  console.log(`  VP expires at: ${signedVP.expirationDate}`);
-  console.log(`  VC id: ${vc.id}`);
+  type Result = Awaited<ReturnType<typeof verifier.verify>>;
+  const verify = (signed: SignedCall, options: { action?: string; liveStatus?: boolean } = {}): Promise<Result> =>
+    verifier.verify({ proof: signed.proof, chain, request: signed.request }, { action: SCOPE, liveStatus: true, ...options });
 
-  console.log('[Self Verify] Step 2 - Check VP expiry');
-  if (new Date(signedVP.expirationDate).getTime() <= Date.now()) {
-    fail('Step 2', 'VP expired. VPs are short-lived; create a new one and retry.');
-  }
-  console.log('  PASS');
+  console.log('[2] what the verifier reads, from where it is published...');
+  const document = (await verifier.seams.resolveDid?.(agent.did)) as { verificationMethod?: { id: string }[] } | null;
+  console.log(`    DID document: ${document ? `${document.verificationMethod?.length ?? 0} verification method(s)` : 'not found'}`);
+  const keys = (await verifier.seams.resolveDidKeys?.(agent.did)) ?? [];
+  console.log(`    signing keys the DID publishes: ${keys.length} (the proof's key must be one of them)`);
+  const card = await cardOf(agent.did);
+  const capabilities = (card['capabilities'] as { name: string }[] | undefined)?.map((c) => c.name) ?? [];
+  console.log(`    card: responsible party ${card.responsibleParty}, attested [${capabilities.join(', ')}]`);
 
-  // Resolve the holder public key. `did:key` is resolved locally. `did:web` is
-  // resolved by fetching the issuer's did.json directly from the issuer host.
-  console.log('[Self Verify] Step 3 - Resolve agent verification key');
-  const agentPublicKeyHex = await resolvePublicKeyHex(signedVP.holder).catch((error) =>
-    fail('Step 3', error instanceof Error ? error.message : String(error)),
+  console.log('[3] one call, every check run in-process...');
+  const first = await signCall(agent.signer, service.did, chain);
+  const accepted = await verify(first);
+  show(`the call, for ${SCOPE}`, accepted);
+  console.log(`    chain depth ${accepted.chainSummary.depth}, rooted by ${accepted.chainSummary.responsibleParty}; proof floor met: ${accepted.proofFloor}; status read live: ${accepted.fresh}`);
+
+  console.log('[4] each check, refusing on purpose...');
+  const tampered = await signCall(agent.signer, service.did, chain);
+  const tamperedRequest = { ...tampered.request, params: { ...tampered.request.params, arguments: { q: 'everything' } } };
+  const hashCheck = await verify({ proof: tampered.proof, request: tamperedRequest });
+  show('request hash: the arguments changed after signing', hashCheck);
+  const audienceCheck = await verify(await signCall(agent.signer, other.did, chain));
+  show('audience: a proof signed for another service', audienceCheck);
+  const replayCheck = await verify(first);
+  show('nonce: the first proof sent again', replayCheck);
+  const actionCheck = await verify(await signCall(agent.signer, service.did, chain), { action: OTHER_SCOPE });
+  show(`attenuation: asking for ${OTHER_SCOPE}, which the chain does not allow`, actionCheck);
+  await verify(await signCall(agent.signer, service.did, chain), { liveStatus: false }); // warms the status cache
+  const cachedCheck = await verify(await signCall(agent.signer, service.did, chain), { liveStatus: false });
+  show('status: read from the cache, not live', cachedCheck);
+  await call('POST', `/v1/vcs/${encodeURIComponent(chain[0]!.id)}/revoke`, {});
+  const revokedCheck = await verify(await signCall(agent.signer, service.did, chain));
+  show('status: a call after the root hop was revoked (read live)', revokedCheck);
+
+  const refusedWith = (verdict: Verdict, reason: string): boolean => !acceptable(verdict) && (verdict.reasons ?? []).includes(reason);
+  finish(
+    acceptable(accepted) &&
+      refusedWith(hashCheck, 'request_hash_mismatch') &&
+      refusedWith(audienceCheck, 'audience_mismatch') &&
+      refusedWith(replayCheck, 'nonce_replayed') &&
+      refusedWith(actionCheck, 'action_not_delegated') &&
+      cachedCheck.ok && cachedCheck.level === 'L2' &&
+      refusedWith(revokedCheck, 'status_revoked'),
+    'seven',
   );
-  console.log(`  resolved public key: ${agentPublicKeyHex}`);
-
-  // Trust chain: the agent signed the VP, Helix ID signed the VC, and Hedera
-  // anchored the DID. These are separate checks with separate keys.
-  console.log('[Self Verify] Step 4 - Verify VP signature');
-  const { proof: vpProof, ...vpPayload } = signedVP;
-  if (!(await verifyProof(vpPayload, vpProof, agentPublicKeyHex))) {
-    fail('Step 4', 'VP signature invalid');
-  }
-  console.log('  PASS');
-
-  // Preferred: provide HELIX_ISSUER_PUBLIC_KEY. For demo convenience, this
-  // script falls back to resolving the issuer DID document when env is absent.
-  console.log('[Self Verify] Step 5 - Verify VC signature');
-  // Resolve issuer public key: prefer environment override, otherwise resolve issuer DID
-  let issuerPublicKeyHex: string | undefined = issuerPublicKeyHexFromEnv;
-  if (!issuerPublicKeyHex) {
-    try {
-      issuerPublicKeyHex = await resolvePublicKeyHex(vc.issuer);
-    } catch (error) {
-      fail('Step 5', error instanceof Error ? error.message : String(error));
-    }
-  }
-  const { proof: vcProof, ...vcPayload } = vc;
-  if (!(await verifyProof(vcPayload, vcProof, issuerPublicKeyHex))) {
-    fail('Step 5', 'VC signature invalid');
-  }
-  console.log('  PASS');
-
-  console.log('[Self Verify] Step 6 - Check VC expiry');
-  if (new Date(vc.validUntil).getTime() <= Date.now()) {
-    fail('Step 6', 'credential expired');
-  }
-  console.log('  PASS');
-
-  // delegatedBy is the userDID of the user on whose behalf the agent acts. A
-  // real verifier should check it against its own user/session records.
-  console.log('[Self Verify] Step 7 - Check delegatedBy');
-  console.log(`  delegatedBy: ${signedVP.delegatedBy}`);
-  console.log('  PASS - demo accepts the simulated user DID');
-
-  // This is the remaining network dependency. BitstringStatusList is embedded in the
-  // VC and points at the issuer's status endpoint. Do not skip it: a valid VP
-  // from a revoked credential is still invalid.
-  console.log('[Self Verify] Step 8 - Check BitstringStatusList revocation');
-  const statusRes = await fetch(vc.credentialStatus.statusListCredential);
-  if (!statusRes.ok) fail('Step 8', `StatusList fetch failed with HTTP ${statusRes.status}`);
-  const statusList = (await statusRes.json()) as { credentialSubject: { encodedList: string } };
-  const bit = getBit(
-    statusList.credentialSubject.encodedList,
-    Number(vc.credentialStatus.statusListIndex),
-  );
-  if (bit === 1) fail('Step 8', 'credential revoked');
-  console.log(`  PASS - bit ${bit} at index ${vc.credentialStatus.statusListIndex}`);
-
-  // Replay tracking is the verifier's responsibility when self-verifying.
-  // If your Helix API is configured to be stateless (or you don't call POST /v1/vp/verify),
-  // your verifier must record presented vpIds and reject replays. Example pseudocode:
-  // if (await store.has(vpId)) reject('replay detected');
-  // await store.set(vpId, true, { ttl: untilCredentialExpiry });
-  console.log('[Self Verify] Step 9 - vpId replay protection');
-  console.log(
-    `  CHECK REQUIRED - record ${signedVP.id} in your verifier store and reject it if seen again.`,
-  );
-
-  console.log('[Self Verify] Step 10 - Final verdict');
-  console.log('[Self Verify] TRUSTED');
-  console.log(`  agent DID: ${signedVP.holder}`);
-  console.log(`  user DID: ${signedVP.delegatedBy}`);
-  console.log(
-    `  credentialSubject.privilegeScopes: ${vc.credentialSubject.privilegeScopes.join(', ')}`,
-  );
-  console.log(`  credential expiry: ${vc.validUntil}`);
-  console.log(`  vpId obligation: ${signedVP.id} must be stored as consumed by this verifier.`);
-  console.log(
-    '[Self Verify] Foundation for a no-runtime-Helix verification library; next add DID and StatusList caching.',
-  );
-  console.log('[Self Verify] BitstringStatusList: https://www.w3.org/TR/vc-bitstring-status-list/');
 }
 
-main().catch((error: unknown) => {
-  console.error(
-    `[Self Verify] NOT TRUSTED - ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exitCode = 1;
-});
+main().catch(fail('self-verify'));

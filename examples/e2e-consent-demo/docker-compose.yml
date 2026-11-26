@@ -1,58 +1,65 @@
-# examples/e2e-consent-demo — two independent Service Providers, one agent,
-# and a standing grant that survives to the second booking.
+# examples/e2e-consent-demo — two independent Service Providers, one agent, and
+# a user's consent given on HelixID's consent page that survives to the second
+# booking (KYA-OS story L3-H).
 #
 #   cp .env.example .env
 #   docker compose up --build
 #
-# Then open:
-#   Airline consent : http://localhost:4101/consent
-#   Hotel consent   : http://localhost:4102/consent
-#   Console (audit) : http://localhost:8080   (login admin / admin)
+# Needs the KYA-OS releases of @helixid/core, @helixid/sdk-js (1.0) and
+# @helixid/mcp-middleware (1.0): see README.md.
 #
-# Reset everything (fresh wallets + DB):  docker compose down -v
+# Then open:
+#   Agent           : http://localhost:4100   (traveler / demo123)
+#   Console (audit) : http://localhost:8080   (admin / admin)
+#
+# Reset everything (fresh keys + DB):  docker compose down -v
 #
 # Startup order: helix-api -> seed -> sp-airline + sp-hotel -> agent
 name: helixid-consent-demo
 
+# The SPs and the agent share helix-api's network namespace: did:web DIDs
+# hosted by HelixID encode localhost:3000, which then resolves to the API
+# inside the stack exactly as it does from the browser.
 x-node-service: &node-service
   build:
     context: ../..
     dockerfile: examples/e2e-consent-demo/docker/node.Dockerfile
   restart: unless-stopped
   working_dir: /repo/examples/e2e-consent-demo
+  network_mode: "service:helix-api"
+
+x-node-env: &node-env
+  HELIX_API_URL: http://localhost:3000
+  HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
+  WALLETS_DIR: /wallets
+  DEMO_HOST: localhost
+  CONSENT_WINDOW_SECONDS: ${CONSENT_WINDOW_SECONDS:-2592000}
+  CONSENT_HOP_LIFETIME_SECONDS: ${CONSENT_HOP_LIFETIME_SECONDS:-3600}
 
 services:
-  # ── HelixID API — issues the agent's authority credential ────────────────
-  # DID_METHOD=key so the platform issuer DID resolves offline in every
-  # container. The two SPs are did:web and resolve over the compose network.
+  # ── HelixID API: hosts the DID documents, issues the agent's identity and
+  # attestations, and serves the consent page where the user's key signs.
   helix-api:
     build:
       context: ../..
       dockerfile: Dockerfile
+    # The node services below use this network: their ports are published here.
     ports:
       - "3000:3000"
+      - "4100:4100"
+      - "4101:4101"
+      - "4102:4102"
     environment:
       NODE_ENV: development
       PORT: "3000"
       HELIX_STORAGE_ADAPTER: sqlite
       HELIX_SQLITE_PATH: /app/data/helixid.sqlite
-      API_BASE_URL: http://helix-api:3000
-      DID_METHOD: key
-      HELIX_ISSUER_DID: did:key:z6MkgHKqmKyCQroyo3RVx3gM1LXwUNwzZkynmsqwhYNqNjdn
+      API_BASE_URL: http://localhost:3000
+      DID_METHOD: web
+      DID_DOMAIN: localhost:3000
       HELIX_SIGNING_KEY: 11deb8f4b8f2e1c0a9d7c6b5a4938271605f4e3d2c1b0a998877665544332211
       HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
       AUDIT_LOG_DESTINATION: both
-      # Both SPs' did:web identities encode host "localhost" (so the browser
-      # on the host machine can dereference their published-port URLs
-      # directly). helix-api's own did:web resolver does a real server-side
-      # fetch of that DID's URL to verify it during grant/finalize -- but
-      # "localhost" from *inside* the helix-api container means itself, not
-      # the sp-airline/sp-hotel containers, so that fetch always failed (real
-      # bug hit this session: grant issuance 500s with "fetch failed"). This
-      # redirects just that fetch to the Docker-Desktop-provided hostname
-      # that routes back out to the host's published ports -- see
-      # did-resolver.ts's DID_WEB_LOOPBACK_RESOLVE_HOST handling.
-      DID_WEB_LOOPBACK_RESOLVE_HOST: host.docker.internal
     volumes:
       - helix_data:/app/data
     healthcheck:
@@ -62,10 +69,6 @@ services:
       retries: 12
       start_period: 20s
 
-  # ── Console (audit UI) ───────────────────────────────────────────────────
-  # Built FROM the Console's published multi-arch image on Docker Hub, so this
-  # demo needs no second checkout -- see docker/console.Dockerfile, which only
-  # layers this example's nginx server block on top.
   console:
     build:
       context: ./docker
@@ -81,18 +84,13 @@ services:
       helix-api:
         condition: service_healthy
 
-  # ── Seeder: provisions both SP did:web identities + status lists, then
-  #    enrolls the Travel Planner Agent. Runs once and exits 0. ─────────────
+  # ── Run-once: enrolls both SPs and the agent (self custody: each key is generated here).
   seed:
     <<: *node-service
     restart: "no"
     command: ["pnpm", "run", "setup"]
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
+      <<: *node-env
       CONSOLE_URL: http://localhost:8080
     volumes:
       - wallets:/wallets
@@ -100,20 +98,11 @@ services:
       helix-api:
         condition: service_healthy
 
-  # ── Airline SP: book:flights, modify:booking ─────────────────────────────
   sp-airline:
     <<: *node-service
     command: ["pnpm", "run", "sp:airline"]
-    ports:
-      - "4101:4101"
     environment:
-      # Where this SP reports its own verification/authorization decisions.
-      # Best-effort: unreachable audit never fails a tool call.
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
+      <<: *node-env
       AIRLINE_PORT: "4101"
     volumes:
       - wallets:/wallets
@@ -127,18 +116,11 @@ services:
       seed:
         condition: service_completed_successfully
 
-  # ── Hotel SP: book:hotel. Entirely independent of the Airline. ───────────
   sp-hotel:
     <<: *node-service
     command: ["pnpm", "run", "sp:hotel"]
-    ports:
-      - "4102:4102"
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
+      <<: *node-env
       HOTEL_PORT: "4102"
     volumes:
       - wallets:/wallets
@@ -152,23 +134,14 @@ services:
       seed:
         condition: service_completed_successfully
 
-  # ── Travel Planner Agent ─────────────────────────────────────────────────
   agent:
     <<: *node-service
     command: ["pnpm", "run", "agent"]
-    ports:
-      - "4100:4100"
     environment:
-      HELIX_API_URL: http://helix-api:3000
-      # Lets the agent's wallet post CONSENT_GRANTED to helix-api's audit log
-      # when a grant lands. Best-effort: the demo runs fine without it.
-      HELIX_ADMIN_API_KEY: ${HELIX_ADMIN_API_KEY:-dev-admin-key-change-in-production}
-      WALLETS_DIR: /wallets
-      WALLET_PASSPHRASE: ${WALLET_PASSPHRASE:-demo-passphrase}
-      DEMO_HOST: ${DEMO_HOST:-localhost}
+      <<: *node-env
       AGENT_PORT: "4100"
-      AIRLINE_URL: http://sp-airline:4101
-      HOTEL_URL: http://sp-hotel:4102
+      AIRLINE_URL: http://localhost:4101
+      HOTEL_URL: http://localhost:4102
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}

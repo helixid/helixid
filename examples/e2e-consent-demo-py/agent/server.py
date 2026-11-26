@@ -1,16 +1,21 @@
-# Travel Planner Agent. Python port of agent/server.ts.
+# Travel Planner Agent. Python port of examples/e2e-consent-demo/agent/server.ts.
 #
-# The agent calls SP tools. It has no consent logic of
-# its own: when an SP answers "not without a grant", the agent hands the
-# user off to that SP's consent page and waits for the grant to come back.
+# The agent keeps its own key (self custody: seed/seed.py ran helix init): it
+# signs every request proof itself; Helix never holds its key. It has no consent
+# logic of its own: when an SP answers with the signed needs_authorization
+# challenge, the agent checks the SP's response proof and hands the user the
+# consent URL, which is Helix's consent page (KYA-OS story L3-H). There the
+# user's own did:key signs the root hop of the agent's chain.
 #
-# How the grant becomes usable in the browser flow:
-#   1. POST /api/call     -> { status: 'consent_required', consentUrl }
-#   2. the UI opens consentUrl (the SP's own page, on the SP's own origin)
-#   3. the page posts the signed grant back via postMessage
-#   4. the UI forwards it to POST /api/grants, which acknowledges it -- the
-#      platform already holds it, so there is nothing agent-side to store
-#   5. the UI retries POST /api/call, which now finds the grant and succeeds
+# The browser flow:
+#   1. POST /api/call             -> { status: 'consent_required', consentUrl, pendingId }
+#   2. the UI opens consentUrl (Helix's page, on Helix's origin)
+#   3. the UI calls POST /api/consent/complete { pendingId }: the agent waits
+#      for the user's decision, keeps the signed root hop and retries the call
+#      with the resume token and the hop
+#
+# Step 4 of the demo flow short-circuits all of that: /api/call carries the
+# stored hop on the first attempt (renewed without a click when due).
 #
 # Tool planning is provider-neutral: Gemini, OpenAI, or Anthropic when a key
 # is configured, with a deterministic scripted fallback when it is not.
@@ -19,16 +24,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from flask import Flask, Response, jsonify, request
+import requests
 
-from helix_sdk.client import HelixClient
+from dotenv import load_dotenv
 
-from agent.consent_aware_call import ConsentDeclinedError, call_sp_tool
-from agent.conversation import (
+load_dotenv()
+
+from flask import Flask, Response, jsonify, request  # noqa: E402
+
+from helix_sdk import consent as helix_consent  # noqa: E402
+from helix_sdk.crypto.jws import EnvSigner  # noqa: E402
+from helix_sdk.errors import ConsentFlowError  # noqa: E402
+from helix_sdk.verifier.resolve import create_did_resolver  # noqa: E402
+
+from agent.consent_aware_call import CallSpToolOptions, call_sp_tool, complete_consent  # noqa: E402
+from agent.consent_store import ConsentStore  # noqa: E402
+from agent.conversation import (  # noqa: E402
     city_label,
     extract_slots,
     mentions_booking_confirmation,
@@ -40,19 +56,20 @@ from agent.conversation import (
     resolve_track,
     summarise_profile,
 )
-from agent.planner import (
+from agent.planner import (  # noqa: E402
     DeterministicPlanner,
     ToolValidationError,
     create_tool_planner,
     describe_plan_for_history,
     phrase_question,
 )
-from agent.web import agent_page_html
-from helixid_config import AIRLINE, DEMO_USER_DID, HOTEL, agent_identity_path, env, sp_did_for
+from agent.web import agent_page_html  # noqa: E402
+from helixid_config import AIRLINE, DEMO_SERVICE_USER, HOTEL, agent_dir, allow_loopback_http, env  # noqa: E402
 
 SP_BY_ID = {"airline": AIRLINE, "hotel": HOTEL}
 AGENT_USERNAME = "traveler"
 AGENT_PASSWORD = "demo123"
+AGENT_ID = "travel-planner"
 
 DEFAULT_MODELS = {"gemini": "gemini-2.5-flash", "openai": "gpt-4o-mini", "anthropic": "claude-sonnet-4-5"}
 
@@ -80,20 +97,57 @@ def _known_facts(profile: Dict[str, Any]) -> Dict[str, Any]:
     return known
 
 
-def create_app() -> tuple:
-    identity_file = agent_identity_path(env.wallets_dir, "travel-planner")
-    try:
-        with open(identity_file, "r", encoding="utf-8") as handle:
-            identity = json.load(handle)
-    except (OSError, ValueError) as exc:
-        raise RuntimeError(
-            f"No agent identity at {identity_file}. Run the seeder before starting the agent."
-        ) from exc
-    agent_did = identity["agentDid"]
+def _load_agent() -> tuple:
+    """helix init's output: the agent's DID and kid (helix-agent.json) and its own key (signing-key.env)."""
+    directory = agent_dir(env.wallets_dir)
+    summary_file = os.path.join(directory, "helix-agent.json")
+    key_file = os.path.join(directory, "signing-key.env")
+    if not (os.path.exists(summary_file) and os.path.exists(key_file)):
+        raise RuntimeError(f"No agent identity in {directory}. Run the seeder first: python -m seed.seed")
+    with open(summary_file, "r", encoding="utf-8") as f:
+        summary = json.load(f)
+    key_env: Dict[str, str] = {}
+    with open(key_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                name, value = line.split("=", 1)
+                key_env[name.strip()] = value.strip()
+    return summary["did"], summary["kid"], key_env
 
-    # The admin key is what lets this process ask the API to sign on the
-    # agent's behalf. In OSS there is no per-agent credential narrower than it.
-    client = HelixClient(env.helix_api_url, admin_api_key=env.admin_api_key)
+
+def _resolve_sp_dids() -> Dict[str, str]:
+    """Each SP's Helix-hosted did:web, read from its /health -- the SPs must be up before the agent."""
+    dids: Dict[str, str] = {}
+    for sp_id, url in (("airline", env.airline_url), ("hotel", env.hotel_url)):
+        try:
+            did = requests.get(f"{url}/health", timeout=10).json().get("did")
+        except Exception:  # noqa: BLE001
+            did = None
+        if not did:
+            raise RuntimeError(f"SP at {url} is not up -- start sp_airline and sp_hotel first.")
+        dids[sp_id] = did
+    return dids
+
+
+def _fetch_json(url: str) -> Any:
+    response = requests.get(url, timeout=10)
+    return response.json() if response.ok else None
+
+
+def create_app() -> tuple:
+    agent_did, kid, key_env = _load_agent()
+    # Self custody: the agent signs its own request proofs; its key never leaves this process.
+    signer = EnvSigner(agent_did, kid=kid, env_var="HELIX_SIGNING_KEY", env=key_env)
+    consents = ConsentStore(os.path.join(env.wallets_dir, f"{AGENT_ID}-consents.json"))
+    # The SPs' did:web documents are hosted by Helix; a local run serves them on loopback http.
+    resolve_did = create_did_resolver(
+        _fetch_json,
+        rewrite_url=(lambda url: re.sub(r"^https://(localhost|127\.0\.0\.1)([:/])", r"http://\1\2", url)) if allow_loopback_http else None,
+    )
+    sp_dids = _resolve_sp_dids()
+    # Challenged calls waiting for the user's decision on Helix's page.
+    pending_calls: Dict[str, Dict[str, Any]] = {}
 
     planner = (
         create_tool_planner(env.llm_provider, env.llm_api_key, env.llm_model or DEFAULT_MODELS[env.llm_provider])
@@ -109,11 +163,10 @@ def create_app() -> tuple:
     trip_profiles: Dict[str, Dict[str, Any]] = {}
     planner_info = {"provider": planner.provider, "model": planner.model}
 
-    sp_origins = [f"http://{env.host}:{sp.port}" for sp in SP_BY_ID.values()]
 
     @app.get("/")
     def index() -> Any:
-        return Response(agent_page_html(sp_origins), mimetype="text/html")
+        return Response(agent_page_html(), mimetype="text/html")
 
     @app.get("/api/session")
     def session_info() -> Any:
@@ -129,13 +182,13 @@ def create_app() -> tuple:
         if body.get("username") != AGENT_USERNAME or body.get("password") != AGENT_PASSWORD:
             return jsonify({"error": "Invalid username or password"}), 401
         token = str(uuid.uuid4())
-        sessions[token] = {"username": AGENT_USERNAME, "userDid": DEMO_USER_DID}
+        sessions[token] = {"username": AGENT_USERNAME, "serviceUser": DEMO_SERVICE_USER}
         conversation_history[token] = []
         resp = jsonify(
             {
                 "authenticated": True,
                 "username": AGENT_USERNAME,
-                "userDid": DEMO_USER_DID,
+                "serviceUser": DEMO_SERVICE_USER,
                 "agentDid": agent_did,
                 "planner": planner_info,
             }
@@ -156,10 +209,6 @@ def create_app() -> tuple:
     def require_session() -> Any:
         if not request.path.startswith("/api"):
             return None
-        # /api/login, /api/session, and /api/logout all have to work without
-        # an existing session (matching server.ts: those three routes are
-        # registered before the auth middleware, so Express never runs it
-        # for them at all).
         if request.path in ("/api/login", "/api/session", "/api/logout"):
             return None
         token = request.cookies.get("agent_session", "")
@@ -170,7 +219,7 @@ def create_app() -> tuple:
 
     @app.get("/health")
     def health() -> Any:
-        return jsonify({"status": "ok", "agentDid": agent_did, "userDid": DEMO_USER_DID, "llm": planner_info})
+        return jsonify({"status": "ok", "agentDid": agent_did, "serviceUser": DEMO_SERVICE_USER, "llm": planner_info})
 
     def _record_turn(token: str, history: List[Dict[str, str]], user_message: str, plan: Dict[str, Any]) -> None:
         conversation_history[token] = (
@@ -288,42 +337,28 @@ def create_app() -> tuple:
             {**plan, "planner": used_planner, "profile": current_profile, "summary": summarise_profile(current_profile)}
         )
 
-    def _held_grants_by_service() -> Dict[str, Dict[str, Any]]:
-        """Every grant the platform holds for this agent and this user,
-        keyed by the service it authorizes. One pass over the agent's active
-        credentials rather than one lookup per SP."""
-        by_service: Dict[str, Dict[str, Any]] = {}
-        for summary in client.list_vcs(subject_did=agent_did, status="active"):
-            vc = (client.get_vc(summary["vcId"]) or {}).get("vc")
-            if not vc or "DelegationGrantCredential" not in (vc.get("type") or []):
-                continue
-            subject = vc.get("credentialSubject") or {}
-            if subject.get("userDid") != DEMO_USER_DID:
-                continue
-            service_did = subject.get("serviceDid") or vc.get("issuer")
-            if service_did:
-                by_service[service_did] = subject
-        return by_service
-
     @app.get("/api/state")
     def state() -> Any:
-        held_grants = _held_grants_by_service()
+        """Everything the UI needs to render current authorization state: the root hop the user signed, per SP."""
         grants = []
         for sp in SP_BY_ID.values():
-            service_did = sp_did_for(env.host, sp.port)
-            held = held_grants.get(service_did)
-            subject = held or {}
+            service_did = sp_dids[sp.id]
+            held = consents.get(service_did)
+            hop = (held or {}).get("hop") or {}
             grants.append(
                 {
                     "sp": sp.id,
                     "displayName": sp.display_name,
                     "serviceDid": service_did,
                     "hasGrant": bool(held),
-                    "scopes": subject.get("scopes", []),
-                    "durability": subject.get("durability"),
+                    # What the user consented to, not just that they consented.
+                    "scopes": (hop.get("credentialSubject") or {}).get("allowedAction", []),
+                    "windowUntil": datetime.fromtimestamp(held["windowUntil"], timezone.utc).isoformat().replace("+00:00", "Z") if held else None,
+                    # The user's pairwise did:key at this SP: a different key per SP.
+                    "userDid": hop.get("issuer") if held else None,
                 }
             )
-        return jsonify({"agentDid": agent_did, "userDid": DEMO_USER_DID, "grants": grants})
+        return jsonify({"agentDid": agent_did, "serviceUser": DEMO_SERVICE_USER, "grants": grants})
 
     @app.post("/api/call")
     def call() -> Any:
@@ -333,79 +368,84 @@ def create_app() -> tuple:
         if not sp or not tool:
             return jsonify({"error": "sp and tool are required"}), 400
 
-        service_did = sp_did_for(env.host, sp.port)
+        service_did = sp_dids[sp.id]
+        # The MCP URL may use a compose-internal hostname.
         base_url = env.airline_url if sp.id == "airline" else env.hotel_url
-        public_base_url = f"http://{env.host}:{sp.port}"
+        # One id per user-initiated action, so the SP's verification / authorization /
+        # invocation events all stitch back to it.
         correlation_id = f"act_{uuid.uuid4().hex[:12]}"
-
-        def on_consent_required(prompt: Dict[str, str]) -> Optional[Dict[str, Any]]:
-            log(f"consent required for {tool} at {prompt['serviceDid']}")
-            return None
-
+        options = CallSpToolOptions(
+            signer=signer,
+            agent_did=agent_did,
+            consents=consents,
+            service_user_id=DEMO_SERVICE_USER,
+            sp_mcp_url=f"{base_url}/api/mcp",
+            service_did=service_did,
+            tool_name=tool,
+            resolve_did=resolve_did,
+            args=body.get("args") or {},
+            correlation_id=correlation_id,
+        )
         try:
-            result = call_sp_tool(
-                client=client,
-                agent_did=agent_did,
-                user_did=DEMO_USER_DID,
-                sp_mcp_url=f"{base_url}/api/mcp",
-                service_did=service_did,
-                tool_name=tool,
-                on_consent_required=on_consent_required,
-                args=body.get("args"),
-                correlation_id=correlation_id,
-            )
-
-            if result["ok"]:
+            result = call_sp_tool(options)
+            if result["status"] == "consent_required":
+                # The agent does not resolve consent itself: it reports where the user
+                # must go (the URL the SP signed), and the UI drives the handoff.
+                prompt = result["prompt"]
+                log(f"consent required for {tool} at {service_did}")
+                pending_id = str(uuid.uuid4())
+                pending_calls[pending_id] = {"options": options, "prompt": prompt}
+                return jsonify(
+                    {
+                        "status": "consent_required",
+                        "sp": sp.id,
+                        "serviceDid": service_did,
+                        "consentUrl": prompt.authorization_url,
+                        "scopes": prompt.scopes,
+                        "pendingId": pending_id,
+                        "correlationId": correlation_id,
+                    }
+                )
+            if result["status"] == "ok":
                 matched_tool = next((t for t in sp.tools if t.name == tool), None)
                 protected_tool = bool(matched_tool and matched_tool.required_scope)
-                authorization_source = (
-                    ("fresh_consent" if body.get("authorizationSource") == "fresh_consent" else "standing_grant")
-                    if protected_tool
-                    else "not_required"
-                )
+                authorization_source = ("standing_grant" if result["consentReused"] else "fresh_consent") if protected_tool else "not_required"
                 log(f"{tool} succeeded (authorizationSource={authorization_source})")
                 return jsonify({"status": "ok", "data": result.get("data"), "authorizationSource": authorization_source})
             return jsonify({"status": "error", "error": result.get("error")})
-        except ConsentDeclinedError:
-            return jsonify(
-                {
-                    "status": "consent_required",
-                    "sp": sp.id,
-                    "serviceDid": service_did,
-                    "consentUrl": (
-                        f"{public_base_url}/consent?agentDid={_qs(agent_did)}"
-                        f"&userDid={_qs(DEMO_USER_DID)}&correlationId={_qs(correlation_id)}"
-                    ),
-                    "correlationId": correlation_id,
-                }
-            )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"status": "error", "error": {"message": str(exc)}}), 500
 
-    @app.post("/api/grants")
-    def grants() -> Any:
+    @app.post("/api/consent/complete")
+    def consent_complete() -> Any:
+        """After the UI opened Helix's consent page: waits for the user's decision, keeps the root hop
+        the user's did:key signed, and retries the challenged call with the resume token and that hop."""
         body = request.get_json(silent=True) or {}
-        grant_vc = body.get("grantVC")
-        if not grant_vc:
-            return jsonify({"error": "grantVC is required"}), 400
-        # Nothing to store: the platform recorded this grant when the SP
-        # finalized it, and /api/call reads it back from there. The route
-        # stays because the browser flow posts here.
-        log(f"grant {grant_vc.get('id')} from {grant_vc.get('issuer')} acknowledged (held by platform)")
-        return jsonify({"stored": True}), 201
+        pending = pending_calls.pop(body.get("pendingId") or "", None)
+        if pending is None:
+            return jsonify({"status": "error", "error": {"message": "no call is waiting for consent"}}), 404
+        options = pending["options"]
+        try:
+            result = complete_consent(options, pending["prompt"])
+            if result["status"] == "ok":
+                log(f"{options.tool_name} succeeded after consent (authorizationSource=fresh_consent)")
+                return jsonify({"status": "ok", "data": result.get("data"), "authorizationSource": "fresh_consent"})
+            return jsonify(result)
+        except ConsentFlowError as exc:
+            if exc.reason == helix_consent.ConsentReasons.NOT_APPROVED:
+                log(f"consent declined for {options.tool_name} at {options.service_did}")
+                return jsonify({"status": "declined"})
+            return jsonify({"status": "error", "error": {"message": str(exc)}}), 500
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"status": "error", "error": {"message": str(exc)}}), 500
 
     return app, agent_did
 
 
-def _qs(value: str) -> str:
-    from urllib.parse import quote
-
-    return quote(value, safe="")
-
-
 if __name__ == "__main__":
-    flask_app, agent_did = create_app()
+    flask_app, resolved_agent_did = create_app()
     log(f"Travel Planner Agent listening on :{env.agent_port}")
-    log(f"agent DID {agent_did}")
-    log(f"acting for {DEMO_USER_DID}")
-    flask_app.run(host="0.0.0.0", port=env.agent_port)
+    log(f"agent DID {resolved_agent_did}")
+    log(f"acting for the SPs' user {DEMO_SERVICE_USER}")
+    # threaded: /api/consent/complete waits on the user's decision while the page keeps working.
+    flask_app.run(host="0.0.0.0", port=env.agent_port, threaded=True)

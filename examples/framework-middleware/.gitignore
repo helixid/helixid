@@ -1,1 +1,4 @@
-agent/*.enc
+# Written by setup-live.ts: the agent record, its did.json/card.json and
+# helix init's signing-key.env (the private key). Only .keepit is tracked.
+agent/*
+!agent/.keepit

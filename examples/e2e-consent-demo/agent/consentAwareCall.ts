@@ -1,219 +1,127 @@
-// The agent's consent-aware tool call — the whole of Part D's behaviour in one
-// function.
+// The agent's consent-aware tool call (KYA-OS stories C-C, L3-E, L3-H).
 //
-// The agent itself has no consent logic: it never decides what the user may
-// authorize, it only notices when an SP says "not without a grant" and hands
-// off to that SP's own consent page. What makes step 5 of the demo work is the
-// first line of callSpTool(): before building any presentation, ask whether a
-// grant for THIS (service, user) pair already exists. If it does, it travels
-// in the VP and the SP is satisfied on the first attempt — no prompt, no
-// second grant issued.
+// Every call carries a request proof signed by the agent's own key (self
+// custody: the key helix init generated, never sent to Helix) and, once the user consented
+// at this SP, its chain: the root hop the user's did:key signed on Helix's
+// consent page, renewed without a click before it expires. When the SP answers
+// with the signed needs_authorization challenge, the agent first checks the
+// SP's response proof (so the consent URL it shows is the one the SP sent),
+// then hands the user the URL and waits; once the user approved, it retries
+// with the resume token and the new hop.
 //
-// Agent self-custody is retired, so "ask" now means asking the platform
-// rather than a local wallet: the SP's grant is persisted when it finalizes
-// it, and the VP is signed by the API on the agent's behalf.
+// Step 4 of the demo (a second booking at the same SP, no prompt) is the
+// stored hop: the SP verifies it on the first attempt.
 
-import type { HelixClient, SignedVC, SignedVP } from '@helixid/sdk-js';
+import { kyaos } from '@helixid/sdk-js';
+import type { ConsentStore } from './consentStore.js';
 
-export interface ConsentPrompt {
-  serviceDid: string;
-  consentUrl: string;
-  requiredScope: string;
-}
-
-/**
- * Surfaces consent to the End User and returns the grant the SP issued, or
- * null if the user declined. In the browser demo this opens the SP's consent
- * page; in tests it drives the same two HTTP routes directly.
- */
-export type ConsentHandler = (prompt: ConsentPrompt) => Promise<SignedVC | null>;
+/** Which of the SP's users the agent acts for (see helixid-config DEMO_SERVICE_USER). */
+export const SERVICE_USER_META_KEY = 'org.helixid/service-user';
 
 export interface CallSpToolOptions {
-  client: HelixClient;
-  /** The agent's own DID — what the wallet file used to imply. */
+  signer: kyaos.Signer;
   agentDid: string;
-  /** DID or email — must be the identifier the grant captured at consent time. */
-  userDid: string;
+  consents: ConsentStore;
+  serviceUserId: string;
   spMcpUrl: string;
   serviceDid: string;
   toolName: string;
   args?: Record<string, unknown>;
-  onConsentRequired: ConsentHandler;
-  /**
-   * Stitches every audit event this call produces — presentation,
-   * verification, authorization, invocation, and any grant issued along the
-   * way — into one traceable chain for a single user action.
-   */
   correlationId?: string;
+  /** Resolves the SP's did:web document, to check its response proofs. */
+  resolveDid: kyaos.DidResolver;
 }
 
-export interface CallSpToolResult {
-  ok: boolean;
-  data?: Record<string, unknown>;
-  /** True when this call had to stop and ask the user to authorize. */
-  consentPrompted: boolean;
-  error?: { code: string; reason?: string; message: string };
+export interface ConsentPrompt {
+  authorizationUrl: string;
+  resumeToken: string;
+  scopes: string[];
 }
 
-export class ConsentDeclinedError extends Error {
-  constructor(serviceDid: string) {
-    super(`User declined consent for ${serviceDid}`);
-    this.name = 'ConsentDeclinedError';
-  }
-}
+export type CallSpToolResult =
+  | { status: 'ok'; data?: Record<string, unknown>; consentReused: boolean }
+  | { status: 'consent_required'; prompt: ConsentPrompt }
+  | { status: 'error'; error: { code: string; message: string } };
 
 interface JsonRpcResponse {
-  result?: { structuredContent?: Record<string, unknown> };
-  error?: {
-    code?: number;
-    message?: string;
-    data?: { code?: string; reason?: string; requiredScope?: string; consentUrl?: string };
-  };
+  result?: Record<string, unknown>;
+  error?: { code?: number; message?: string; data?: { code?: string } };
 }
 
-/**
- * The platform's standing grant for this SP and this user, if any.
- *
- * There is no wallet to ask any more: the SP's DelegationGrantCredential is
- * persisted by the platform when the SP finalizes it. listVCs() returns
- * summaries without a credentialSubject, so each active credential is read
- * back in full to match on (service, user). That is a read per credential,
- * which is fine at demo scale — an agent holding many grants would want a
- * server-side filter instead.
- */
-async function findExistingGrant(
-  client: HelixClient,
-  agentDid: string,
-  serviceDid: string,
-  userDid: string,
-): Promise<SignedVC | undefined> {
-  const summaries = await client.listVCs({ subjectDid: agentDid, status: 'active' });
-  for (const summary of summaries) {
-    const vc = (await client.getVC(summary.vcId)).vc as SignedVC | undefined;
-    if (!vc || !(vc.type as string[]).includes('DelegationGrantCredential')) continue;
-    const subject = vc.credentialSubject as unknown as {
-      userDid?: string;
-      serviceDid?: string;
-    };
-    // serviceDid is optional on the grant subject; the issuer is the SP either way.
-    if (subject.userDid === userDid && (subject.serviceDid ?? vc.issuer) === serviceDid) {
-      return vc;
-    }
-  }
-  return undefined;
-}
-
-async function buildVP(
-  client: HelixClient,
-  agentDid: string,
-  serviceDid: string,
-  userDid: string,
-  grant: SignedVC | undefined,
-): Promise<SignedVP> {
-  // Signed by the API on the agent's behalf — with self-custody retired the
-  // agent has no key to sign with. The server looks up the agent's own
-  // HelixAgentCredential itself; the grant travels as a separate, independent
-  // credential and is never merged into that credential's delegation chain.
-  return client.signVP(agentDid, serviceDid, {
-    userDid,
-    ...(grant ? { grantVC: grant } : {}),
-  });
-}
-
-async function postToolCall(
-  spMcpUrl: string,
-  toolName: string,
-  args: Record<string, unknown>,
-  vp: SignedVP,
-  correlationId?: string,
-): Promise<JsonRpcResponse> {
+async function post(spMcpUrl: string, call: { method: string; params: Record<string, unknown> }): Promise<JsonRpcResponse> {
   const response = await fetch(spMcpUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: {
-        name: toolName,
-        arguments: {
-          ...args,
-          _helixVP: vp,
-          ...(correlationId !== undefined ? { _helixCorrelationId: correlationId } : {}),
-        },
-      },
-    }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...call }),
   });
   return (await response.json()) as JsonRpcResponse;
 }
 
-export async function callSpTool(options: CallSpToolOptions): Promise<CallSpToolResult> {
-  const { client, agentDid, userDid, spMcpUrl, serviceDid, toolName } = options;
-  const args = options.args ?? {};
-
-  // Step 5 hinges on this: reuse a standing grant if the platform already
-  // holds one for this (service, user) pair.
-  const existingGrant = await findExistingGrant(client, agentDid, serviceDid, userDid);
-  const first = await postToolCall(
-    spMcpUrl,
-    toolName,
-    args,
-    await buildVP(client, agentDid, serviceDid, userDid, existingGrant),
-    options.correlationId,
-  );
-
-  if (!first.error) {
-    return { ok: true, consentPrompted: false, ...(first.result?.structuredContent !== undefined ? { data: first.result.structuredContent } : {}) };
+/** The stored consent's hop, renewed first when it nears its end inside the consented window. */
+async function currentHop(options: CallSpToolOptions): Promise<kyaos.consent.ConsentHop | undefined> {
+  const stored = await options.consents.get(options.serviceDid);
+  if (stored === undefined) return undefined;
+  const now = Date.now();
+  // renewBefore never answers a time before `now`, so it is asked from the epoch: when the 60 s margin starts.
+  const renewAt = kyaos.consent.renewBefore(stored.hop['validUntil'] as string, 60, 0);
+  if (now < renewAt) return stored.hop;
+  if (now >= stored.windowUntil * 1000) {
+    // The consented window is over: the user is asked again on the next call.
+    await options.consents.drop(options.serviceDid);
+    return undefined;
   }
-
-  if (first.error.data?.code !== 'CONSENT_REQUIRED') {
-    return {
-      ok: false,
-      consentPrompted: false,
-      error: {
-        code: first.error.data?.code ?? 'CALL_FAILED',
-        ...(first.error.data?.reason !== undefined ? { reason: first.error.data.reason } : {}),
-        message: first.error.message ?? 'Tool call failed',
-      },
-    };
+  try {
+    const renewed = await kyaos.consent.renewConsentHop({ helixUrl: stored.helixUrl, consentId: stored.consentId, signer: options.signer, serviceDid: options.serviceDid });
+    await options.consents.put({ ...stored, hop: renewed.hop, windowUntil: renewed.windowUntil });
+    return renewed.hop;
+  } catch {
+    // Withdrawn, or the window ended: ask again.
+    await options.consents.drop(options.serviceDid);
+    return undefined;
   }
+}
 
-  // The SP wants a grant. Hand off to its consent page.
-  const grantVC = await options.onConsentRequired({
-    serviceDid,
-    consentUrl: first.error.data.consentUrl ?? '',
-    requiredScope: first.error.data.requiredScope ?? '',
-  });
-  if (!grantVC) {
-    throw new ConsentDeclinedError(serviceDid);
-  }
-
-  // No agent-side store to put it in, and none needed: the platform recorded
-  // this grant when the SP finalized it, so the next call's findExistingGrant()
-  // will see it. Passed straight through here to avoid re-reading it.
-  const retry = await postToolCall(
-    spMcpUrl,
-    toolName,
-    args,
-    await buildVP(client, agentDid, serviceDid, userDid, grantVC),
-    options.correlationId,
-  );
-
-  if (retry.error) {
-    return {
-      ok: false,
-      consentPrompted: true,
-      error: {
-        code: retry.error.data?.code ?? 'CALL_FAILED',
-        ...(retry.error.data?.reason !== undefined ? { reason: retry.error.data.reason } : {}),
-        message: retry.error.message ?? 'Tool call failed after consent',
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    consentPrompted: true,
-    ...(retry.result?.structuredContent !== undefined ? { data: retry.result.structuredContent } : {}),
+/** The call as sent: arguments (with the resume control arguments on a retry), the proof over exactly that, and the chain. */
+async function signedCall(options: CallSpToolOptions, hop: kyaos.consent.ConsentHop | undefined, resume?: { token: string; hop: unknown }): Promise<kyaos.ProofRequest> {
+  const base = {
+    name: options.toolName,
+    arguments: { ...(options.args ?? {}), ...(options.correlationId !== undefined ? { _helixCorrelationId: options.correlationId } : {}) },
   };
+  const params = resume === undefined ? base : kyaos.withResume(base, resume.token, resume.hop);
+  const call = { method: 'tools/call', params: { ...params, _meta: { [SERVICE_USER_META_KEY]: options.serviceUserId } } };
+  return kyaos.withRequestProof(call, options.signer, { audience: options.serviceDid, ...(hop === undefined ? {} : { chain: [hop] }) });
+}
+
+function outcome(response: JsonRpcResponse, consentReused: boolean): CallSpToolResult {
+  if (response.error) return { status: 'error', error: { code: response.error.data?.code ?? 'CALL_FAILED', message: response.error.message ?? 'Tool call failed' } };
+  const result = response.result ?? {};
+  if (result['isError']) {
+    const code = (result['structuredContent'] as { error?: string } | undefined)?.error ?? 'CALL_FAILED';
+    return { status: 'error', error: { code, message: (result['content'] as { text?: string }[] | undefined)?.[0]?.text ?? code } };
+  }
+  return { status: 'ok', consentReused, ...(result['structuredContent'] !== undefined ? { data: result['structuredContent'] as Record<string, unknown> } : {}) };
+}
+
+export async function callSpTool(options: CallSpToolOptions): Promise<CallSpToolResult> {
+  const hop = await currentHop(options);
+  const call = await signedCall(options, hop);
+  const response = await post(options.spMcpUrl, call as { method: string; params: Record<string, unknown> });
+  if (response.result && kyaos.isNeedsAuthorization(response.result)) {
+    // The SP's signature over the challenge, checked before its URL is trusted.
+    const { challenge } = await kyaos.handleNeedsAuthorization(response.result, options.serviceDid, options.resolveDid, { request: call as { method: string; params: Record<string, unknown> } });
+    return { status: 'consent_required', prompt: { authorizationUrl: challenge.authorizationUrl, resumeToken: challenge.resumeToken, scopes: challenge.scopes } };
+  }
+  return outcome(response, hop !== undefined);
+}
+
+/**
+ * After the user decided on Helix's page: waits for the root hop, keeps it,
+ * and retries the challenged call with the resume token and the hop. Throws
+ * ConsentFlowError (reason `consent_not_approved`) when the user declined.
+ */
+export async function completeConsent(options: CallSpToolOptions, prompt: ConsentPrompt): Promise<CallSpToolResult> {
+  const approved = await kyaos.consent.awaitConsentHop(prompt.authorizationUrl, { agentDid: options.agentDid, serviceDid: options.serviceDid, timeoutMs: 300_000 });
+  await options.consents.put({ serviceDid: options.serviceDid, consentId: approved.consentId, hop: approved.hop, windowUntil: approved.windowUntil, helixUrl: approved.helixUrl });
+  const call = await signedCall(options, approved.hop, { token: prompt.resumeToken, hop: approved.hop });
+  return outcome(await post(options.spMcpUrl, call as { method: string; params: Record<string, unknown> }), false);
 }

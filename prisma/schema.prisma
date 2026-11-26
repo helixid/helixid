@@ -15,7 +15,7 @@ datasource db {
 model Did {
   id                   String      @id
   subjectType          String
-  controller           String
+  controller           String?
   publicKey            String
   publicKeyMultibase   String?
   hederaTopicId        String      @default("")
@@ -53,19 +53,30 @@ model Vc {
   vcJson           Json
   privilegeScopes  Json?
   statusListIndex  Int
-  expiresAt        DateTime
+  expiresAt        DateTime?
   revokedAt        DateTime?
   renewedByVcId    String?
   delegatedFrom    String?
   delegationDepth  Int?
   maxDelegationDepth Int?
   parentVcId       String?
+  // Lookup columns, denormalised from vcJson so a credential can be found
+  // without reading every row's JSON: the credential's own type (the entry
+  // of `type` that is not VerifiableCredential), who signed it, the user it
+  // was granted on behalf of (DelegationGrantCredential only) and the
+  // canonical scope set (sorted, space-joined). A consent grant is one of
+  // (userDid, subjectDid, issuerDid, scopeKey): same four, same grant.
+  vcType           String?
+  issuerDid        String?
+  userDid          String?
+  scopeKey         String?
   createdAt        DateTime  @default(now())
   did              Did       @relation(fields: [subjectDid], references: [id])
 
   @@index([subjectDid])
   @@index([vcId])
   @@index([parentVcId])
+  @@index([subjectDid, vcType, issuerDid, userDid])
   @@map("vcs")
 }
 
@@ -79,39 +90,19 @@ model StatusListEntry {
   @@map("status_list_entries")
 }
 
-model VpId {
-  id            String   @id @default(cuid())
-  vpId          String   @unique
-  agentDid      String
-  userDid       String
-  targetService String
-  expiresAt     DateTime
-  consumedAt    DateTime?
-  createdAt     DateTime @default(now())
-
-  @@index([vpId])
-  @@map("vp_ids")
-}
-
-/// Server-held agent private keys. Agent self-custody is retired: the server
-/// generates the keypair at onboarding and stores the private key encrypted
-/// here, so this table is what makes POST /v1/onboard and the custodial
-/// signing routes work at all.
-///
-/// Mirrors @helixid/core's own AgentKey model — core owns the services that
-/// read and write it (AgentKeyRepository / AesGcmKeyCustody), and this schema
-/// has to declare the same table for the Postgres adapter, which builds its
-/// schema from these migrations rather than from core's.
-model AgentKey {
+// Custody-held private keys for every kind of DID the platform signs for
+// (agent, service, issuer, user). Nobody holds their own key.
+model DidKey {
   id                  String   @id @default(cuid())
   did                 String   @unique
+  subjectType         String   @default("agent")
   encryptedPrivateKey String
   iv                  String
   authTag             String
   algorithm           String
   createdAt           DateTime @default(now())
 
-  @@map("agent_keys")
+  @@map("did_keys")
 }
 
 model EnrollmentToken {
@@ -121,7 +112,7 @@ model EnrollmentToken {
   requestedScopes  String
   requestedDomains String
   maxDelegationDepth Int         @default(0)
-  expiresAt        DateTime
+  expiresAt        DateTime?
   usedAt           DateTime?
   createdAt        DateTime    @default(now())
   challenges       Challenge[]
@@ -148,51 +139,310 @@ model Challenge {
   @@map("challenges")
 }
 
-model PreparedPayload {
-  id                String    @id @default(cuid())
-  token             String    @unique
-  // 'delegation' | 'grant' — see docs/proposal-sdk-api-only.md. One purpose
-  // per row; the finalize endpoint for a given purpose rejects tokens
-  // prepared for a different one (PreparedPayloadPurposeMismatchError).
-  purpose           String
-  // Canonical JSON of the unsigned VC skeleton (no `proof` field). This is
-  // exactly what hashCanonicalPayload() was run over to produce canonicalHash.
-  unsignedPayload    String
-  canonicalHash      String
-  // DID whose signature finalize() must accept over canonicalHash. Prevents
-  // a captured prepare response from being finalized with a different key.
-  expectedSignerDid  String
+// Enrolled Service Providers: the identity side (the DID) of a service. Its
+// private key is in did_keys (subjectType 'service'); the VP-target lookup
+// by name stays in service_registry. A hosted build attributes rows to
+// accounts with its own link table rather than a column here.
+model Service {
+  id            String    @id
+  did           String    @unique
+  name          String
+  domain        String
+  requiredScope String
+  description   String?
+  // Free-form label ('express', 'flask', ...): recorded as given, never
+  // used to select behaviour.
+  framework     String?
+  createdAt     DateTime  @default(now())
+  revokedAt     DateTime?
+
+  @@index([name])
+  @@map("services")
+}
+
+// Onboarded agents as records: the name an agent was onboarded with, its
+// owner-controlled visibility, and what is known about its own onboarding
+// credential (kept here so a registry can filter and page on status without
+// reading `vcs`). Keyed by the agent DID. A hosted build attributes rows to
+// accounts with its own link table rather than a column here, as for services.
+model Agent {
+  did                 String    @id
+  name                String?
+  // 'private' | 'public'. Nothing becomes public by default or by migration.
+  visibility          String    @default("private")
+  visibilityChangedAt DateTime?
+  publishedAt         DateTime?
+  credentialVcId      String?
+  credentialExpiresAt DateTime?
+  revokedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([visibility, publishedAt])
+  @@index([credentialVcId])
+  @@map("agents")
+}
+
+/// KYA-OS audit ledgers (story A-2, AAP-2 Chained): one per tenant.
+/// `tenantKey` is the RFC 8785 text of `tenantRef`. Never deleted (trigger).
+model AuditLedger {
+  ledgerId      String   @id
+  tenantKey     String   @unique
+  tenantRef     Json
+  activeEpochId String?
+  createdAt     DateTime @default(now())
+
+  @@map("audit_ledgers")
+}
+
+/// The ledger-head row: one per epoch, its committed head, its one recorder
+/// authority and, once closed, its seal. Triggers let a head only advance by
+/// one onto a stored entry or be sealed once; never deleted.
+model AuditLedgerHead {
+  ledgerId         String
+  ledgerEpochId    String
+  position         BigInt    @unique @default(autoincrement())
+  sequence         BigInt
+  entryDigest      String
+  recorderDid      String
+  recorderKid      String
+  recorderAlg      String
+  status           String    @default("active")
+  terminalDigest   String?
+  sealReason       String?
+  successorEpochId String?
+  sealedAt         DateTime?
+  openedAt         DateTime  @default(now())
+
+  @@id([ledgerId, ledgerEpochId])
+  @@map("audit_ledger_heads")
+}
+
+/// The atomic journal. Append-only: no update or delete path in code, and
+/// triggers refuse UPDATE, DELETE, TRUNCATE and any insert that is not the
+/// next entry of an active epoch. `entry` is the RFC 8785 text of the signed
+/// entry; the other columns index it. Retained indefinitely.
+model AuditJournalEntry {
+  id                  BigInt   @id @default(autoincrement())
+  ledgerId            String
+  ledgerEpochId       String
+  sequence            BigInt
+  idempotencyKey      String
+  eventId             String
+  sourceId            String
+  eventType           String
+  family              String
+  eventDigest         String
+  entryDigest         String
+  previousEntryDigest String?
+  recordedAt          BigInt
+  correlationId       String?
+  entry               String
+  insertedAt          DateTime @default(now())
+
+  @@unique([ledgerId, ledgerEpochId, sequence])
+  @@unique([ledgerId, idempotencyKey])
+  @@index([eventType, recordedAt])
+  @@index([family, recordedAt])
+  @@index([correlationId])
+  @@index([recordedAt])
+  @@map("audit_journal_entries")
+}
+
+/// Legal holds: applied once, released once, never deleted (trigger).
+model AuditLegalHold {
+  holdId     String    @id
+  ledgerId   String
+  targetKind String
+  objectId   String?
+  target     Json
+  appliedAt  DateTime
+  appliedBy  String
+  releasedAt DateTime?
+  releasedBy String?
+
+  @@index([ledgerId])
+  @@index([objectId])
+  @@map("audit_legal_holds")
+}
+
+/// The evidence vault: AES-256-GCM objects an event refers to by `EvidenceRef`.
+/// The ciphertext is opaque without the key and the tenant-bound AAD. Disposal
+/// (A-2) clears the ciphertext and keeps the reference; nothing else changes.
+model AuditEvidence {
+  objectId         String    @id
+  ciphertextDigest String
+  size             BigInt
+  mediaType        String
+  keyId            String
+  ref              Json
+  ciphertext       Bytes?
+  storedAt         DateTime  @default(now())
+  disposedAt       DateTime?
+  disposalReason   String?
+
+  @@map("audit_evidence")
+}
+
+// KYA-OS story F-3: the custody choice of one agent, service or owner, keyed
+// by its DID. keyCustody 'self' (the key is held client side) | 'helix' (in
+// the KeyStore); didHosting 'own' (did:web on the owner's domain) | 'helix'
+// (did:web under the Helix domain). status 'pending_key' (self-custody,
+// waiting for `helix init`), 'pending_resolution' (own hosting, waiting for
+// the documents to resolve from the owner's domain) or 'active'. A
+// self-custody enrollment token is kept as its sha256 only.
+model CustodyRecord {
+  did                 String       @id
+  subjectType         String
+  keyCustody          String
+  didHosting          String
+  status              String
+  kid                 String?
+  name                String?
+  ownerDid            String?
+  scopes              Json?
+  // What the agent-create route took on the enrollment token: the domains
+  // published as the DID document's LinkedDomains entries (#domain-N), and
+  // the maxDelegationDepth written on the identity credential.
+  requestedDomains    Json?
+  maxDelegationDepth  Int          @default(0)
+  enrollmentTokenHash String?      @unique
+  enrollmentExpiresAt DateTime?
+  enrollmentNonce     String?
+  enrollmentUsedAt    DateTime?
+  credentialVcId      String?
+  activatedAt         DateTime?
+  // Own hosting: the background re-check of a subject waiting for its
+  // documents (pending_resolution): since when it waits, how many checks it
+  // had (the backoff), and when the next one is due (null: none scheduled).
+  pendingResolutionSince DateTime?
+  recheckAttempts     Int          @default(0)
+  nextRecheckAt       DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  keys                CustodyKey[]
+
+  @@index([subjectType, keyCustody])
+  @@index([status, nextRecheckAt])
+  @@map("custody_records")
+}
+
+// Every key a custody subject has had, public half only: where it is held
+// ('self' | 'helix'), and its rotation state ('active', 'retiring' during the
+// overlap after a custody change, 'revoked'). The DID document lists the
+// active and retiring keys.
+model CustodyKey {
+  id           String        @id @default(cuid())
+  did          String
+  kid          String
+  location     String
+  publicKeyJwk Json
+  status       String
+  sequence     Int
+  createdAt    DateTime      @default(now())
+  retiresAt    DateTime?
+  revokedAt    DateTime?
+  record       CustodyRecord @relation(fields: [did], references: [did])
+
+  @@unique([did, kid])
+  @@map("custody_keys")
+}
+
+// KYA-OS story F-3, Helix-side key storage: the private keys Helix holds
+// (custodial agents, services and owners; L3-H consent did:keys), each
+// wrapped with AES-256-GCM under the key-encryption key named by kekId, the
+// row's did, kid and subjectType bound in as associated data. Read and
+// written only by DbKeyStore (stories rule 8). Shredding empties ciphertext
+// and nonce and stamps shreddedAt; the public half stays for the record.
+model WrappedKey {
+  id           String    @id @default(cuid())
+  did          String
+  kid          String
+  subjectType  String
+  algorithm    String
+  kekId        String
+  nonce        String
+  ciphertext   String
+  publicKeyJwk Json
+  createdAt    DateTime  @default(now())
+  shreddedAt   DateTime?
+
+  @@unique([did, kid])
+  @@index([did])
+  @@map("wrapped_keys")
+}
+
+// KYA-OS story L3-H: the root delegation signed by the user's did:key at
+// consent. Public facts only: user private keys are in wrapped_keys
+// (subjectType 'consent'), through the KeyStore (stories rule 8). The
+// service's user id is never stored, only serviceUserRef (SHA-256 of the
+// service DID and the user id).
+model ConsentRequest {
+  id                 String    @id
+  serviceDid         String
+  serviceUserRef     String
+  agentDid           String
+  grant              Json      @map("grant_json")
+  grantDigest        String
+  windowUntil        DateTime
+  hopLifetimeSeconds Int?
+  display            Json?
+  returnUrl          String?
+  status             String
+  pageTokenHash      String?
   expiresAt          DateTime
-  consumedAt         DateTime?
   createdAt          DateTime  @default(now())
+  decidedAt          DateTime?
+  consentId          String?
 
-  @@map("prepared_payloads")
+  @@index([agentDid])
+  @@map("consent_requests")
 }
 
-model ServiceRegistry {
-  id                 String   @id @default(cuid())
-  serviceName        String   @unique
-  displayName        String
-  verifiedDomain     String
-  publicKeyMultibase String
-  apiEndpoint        String
-  metadata           String
-  active             Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+// One pairwise did:key per (service, service user) per consent cycle; the
+// DID string outlives the shredded private half.
+model UserKey {
+  did            String    @id
+  kid            String
+  serviceDid     String
+  serviceUserRef String
+  createdAt      DateTime  @default(now())
+  shreddedAt     DateTime?
 
-  @@map("service_registry")
+  @@index([serviceDid, serviceUserRef])
+  @@map("user_keys")
 }
 
-model AuditLog {
-  id          String   @id @default(cuid())
-  timestamp   DateTime @default(now())
-  eventType   String
-  requestId   String
-  payloadJson String
-  createdAt   DateTime @default(now())
+// What a user approved on the consent page (consentType user-signed).
+model UserConsent {
+  id                 String    @id
+  requestId          String
+  userDid            String
+  serviceDid         String
+  serviceUserRef     String
+  agentDid           String
+  invocationTarget   String
+  allowedAction      Json
+  caveats            Json?
+  windowUntil        DateTime
+  hopLifetimeSeconds Int?
+  consentType        String
+  createdAt          DateTime  @default(now())
+  withdrawnAt        DateTime?
+  latestHopId        String
+  lastHopUntil       DateTime
 
-  @@index([eventType])
-  @@index([requestId])
-  @@map("audit_log")
+  @@index([userDid])
+  @@index([serviceDid, serviceUserRef])
+  @@map("user_consents")
+}
+
+/// Registry v3: the "Make discoverable" choice an agent was onboarded with (default on).
+model RegistryEntry {
+  did          String   @id
+  discoverable Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("registry_entries")
 }
